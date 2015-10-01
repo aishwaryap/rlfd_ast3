@@ -24,6 +24,9 @@ bool heardJoinstState = false;
 
 ros::Publisher pub_velocity;
 
+std::vector<geometry_msgs::Pose> poses;
+std::vector<geometry_msgs::TwistStamped> cartesian_velocities;
+	
 //Joint state cb
 void joint_state_cb (const sensor_msgs::JointStateConstPtr& input) {
 	
@@ -45,9 +48,10 @@ void joint_effort_cb (const sensor_msgs::JointStateConstPtr& input) {
 //Joint state cb
 void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
   current_pose = msg;
+  poses.push_back(current_pose.pose);
   heardPose = true;
   ROS_INFO_STREAM(current_pose);
-  tool_file << current_pose << "\n";
+  tool_file << "Recorded " << current_pose << "\n";
 }
 
 //Joint state cb
@@ -58,13 +62,10 @@ void fingers_cb (const jaco_msgs::FingerPosition msg) {
 
 // TODO: May have to change this data type based on in what form you 
 // get velocities
-void replay_demo(std::vector<geometry_msgs::TwistStamped> 
-	cartesian_velocities, int rateHertz) {
-	geometry_msgs::TwistStamped velocityMsg;
-	
+void replay_demo(int rateHertz) {
 	ros::Rate r(rateHertz);
 	for(int i = 0; i < cartesian_velocities.size(); i++) {
-		velocityMsg.twist = cartesian_velocities[i].twist;
+		//velocityMsg.twist = cartesian_velocities[i].twist;
 		//velocityMsg.twist.linear.x = l_x;
 		//velocityMsg.twist.linear.y = l_y;
 		//velocityMsg.twist.linear.z = l_z;
@@ -74,8 +75,28 @@ void replay_demo(std::vector<geometry_msgs::TwistStamped>
 		//velocityMsg.twist.angular.z = a_z;
 		//velocityMsg.twist.angular.w = a_w;
 		
-		pub_velocity.publish(velocityMsg);
+		//pub_velocity.publish(velocityMsg);
+		pub_velocity.publish(cartesian_velocities[i]);
 		r.sleep();
+	}
+}
+
+// Blocking call for user input
+void pressEnter(){
+	std::cout << "Press the ENTER key to continue";
+	while (std::cin.get() != '\n')
+		std::cout << "Please press ENTER\n";
+}
+
+void findCartesianVelocities(int listenRateHertz) {
+	for (int i=1; i<poses.size(); i++) {
+		geometry_msgs::TwistStamped velocityMsg;
+		velocityMsg.twist.linear.x = (poses[i].position.x - poses[i-1].position.x) * listenRateHertz;
+		velocityMsg.twist.linear.y = (poses[i].position.y - poses[i-1].position.y) * listenRateHertz;
+		velocityMsg.twist.linear.z = (poses[i].position.z - poses[i-1].position.z) * listenRateHertz;
+		velocityMsg.twist.angular.x = (poses[i].orientation.x - poses[i-1].orientation.x) * listenRateHertz;
+		velocityMsg.twist.angular.y = (poses[i].orientation.y - poses[i-1].orientation.y) * listenRateHertz;
+		velocityMsg.twist.angular.z = (poses[i].orientation.z - poses[i-1].orientation.z) * listenRateHertz;
 	}
 }
 
@@ -84,24 +105,24 @@ int main(int argc, char **argv) {
 	ros::init(argc, argv, "subscriber");
 	
 	ros::NodeHandle n;
-
+	
 	// Files to store the recorded data
-	angles_file.open("joint_angles.txt");
-	torques_file.open("joint_torques.txt");
-	tool_file.open("tool_position.txt");
-	finger_file.open("finger_position.txt");
+	angles_file.open("/home/bwi/aishwarya/joint_angles.txt");
+	torques_file.open("/home/bwi/aishwarya/joint_torques.txt");
+	tool_file.open("/home/bwi/aishwarya/tool_position.txt");
+	finger_file.open("/home/bwi/aishwarya/finger_position.txt");
 
 	//create subscriber to joint angles
-	ros::Subscriber sub_angles = n.subscribe ("/joint_states", 1, joint_state_cb);
+	// ros::Subscriber sub_angles = n.subscribe ("/joint_states", 1, joint_state_cb);
 
 	//create subscriber to joint torques
-	ros::Subscriber sub_torques = n.subscribe ("/mico_arm_driver/out/joint_efforts", 1, joint_effort_cb);
+	// ros::Subscriber sub_torques = n.subscribe ("/mico_arm_driver/out/joint_efforts", 1, joint_effort_cb);
 
 	//create subscriber to tool position topic - Cartesian end-effector position
 	ros::Subscriber sub_tool = n.subscribe("/mico_arm_driver/out/tool_position", 1, toolpos_cb);
 
 	//subscriber for fingers
-	ros::Subscriber sub_finger = n.subscribe("/mico_arm_driver/out/finger_position", 1, fingers_cb);
+	// ros::Subscriber sub_finger = n.subscribe("/mico_arm_driver/out/finger_position", 1, fingers_cb);
 
 	// Logic for replaying demo
 	//		First check what data you get in tool_position messages
@@ -109,6 +130,14 @@ int main(int argc, char **argv) {
 	//		function from copy.cpp else you know the rate at which you 
 	//		get cartesian poses. Divide by time (got from frame rate)
 	//		to get velocities
+
+	std::cout << "Move robot to start position and press Enter to start recording";
+
+	ros::Rate r(50);
+	while (ros::ok()) {
+		ros::spin();
+		// Figure out some way to stop this
+	}
 
 	angles_file.close();
 	torques_file.close();
