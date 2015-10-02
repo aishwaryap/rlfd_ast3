@@ -13,17 +13,24 @@
 
 #define NUM_JOINTS 8 //6+2 for the arm
 
-#define VEL_THRESH = 5
+#define VEL_THRESH 5
+#define POSE_DIFF_THRESH 0.0001
+#define abs(x) x>0?x:-x
+#define NEAR_ZERO_VEL 0.0001
 
 std::ofstream angles_file, torques_file, tool_file, finger_file;
 
 sensor_msgs::JointState current_state;
 sensor_msgs::JointState current_effort;
 jaco_msgs::FingerPosition current_finger;
+
 geometry_msgs::PoseStamped current_pose;
+geometry_msgs::PoseStamped prev_pose;
+
 bool heardPose = false;
 bool heardJoinstState = false;
 bool stopRecordingDemo = false;
+bool recording = false;
 
 ros::Publisher pub_velocity;
 
@@ -50,11 +57,15 @@ void joint_effort_cb (const sensor_msgs::JointStateConstPtr& input) {
 
 //Joint state cb
 void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
+	prev_pose = current_pose;
   current_pose = msg;
-  poses.push_back(current_pose.pose);
+  if (recording) {
+		poses.push_back(current_pose.pose);
+  }
+  
   heardPose = true;
-  ROS_INFO_STREAM(current_pose);
-  tool_file << "Recorded " << current_pose << "\n";
+  std::cout << "Heard pose\n";
+  // tool_file << "Recorded " << current_pose << "\n";
 }
 
 //Joint state cb
@@ -69,26 +80,82 @@ void keyboard_interrupt_cb(const std_msgs::String::ConstPtr& msg) {
   stopRecordingDemo = true;
 }
 
-// TODO: May have to change this data type based on in what form you 
-// get velocities
+bool poseMatch(int i){
+	if (abs(current_pose.pose.position.x - poses[i].position.x) > POSE_DIFF_THRESH)
+		return false;
+	if (abs(current_pose.pose.position.y - poses[i].position.y) > POSE_DIFF_THRESH)
+		return false;
+	if (abs(current_pose.pose.position.z - poses[i].position.z) > POSE_DIFF_THRESH)
+		return false;
+	if (abs(current_pose.pose.orientation.x - poses[i].orientation.x) > POSE_DIFF_THRESH)
+		return false;
+	if (abs(current_pose.pose.orientation.y - poses[i].orientation.y) > POSE_DIFF_THRESH)
+		return false;
+	if (abs(current_pose.pose.orientation.z - poses[i].orientation.z) > POSE_DIFF_THRESH)
+		return false;
+	return true;
+}
+
+bool zeroVelocity(geometry_msgs::TwistStamped velocityMsg) {
+	double l_1 = abs(velocityMsg.twist.linear.x) + abs(velocityMsg.twist.linear.y)
+			+ abs(velocityMsg.twist.linear.z) + abs(velocityMsg.twist.angular.x)
+			+ abs(velocityMsg.twist.angular.y) + abs(velocityMsg.twist.angular.z);
+	if (l_1 < NEAR_ZERO_VEL)
+		return true;
+	return false;
+}
+
+
+bool overshot(int i) {
+	double diff1, diff2;
+	diff1 = poses[i-1].position.x - poses[i].position.x;
+	diff2 = current_pose.pose.position.x - poses[i].position.x;
+	if (diff1 * diff2 < 0)
+		return true;
+	diff1 = poses[i-1].position.y - poses[i].position.y;
+	diff2 = current_pose.pose.position.y - poses[i].position.y;
+	if (diff1 * diff2 < 0)
+		return true;
+	diff1 = poses[i-1].position.z - poses[i].position.z;
+	diff2 = current_pose.pose.position.z - poses[i].position.z;
+	if (diff1 * diff2 < 0)
+		return true;
+	diff1 = poses[i-1].orientation.x - poses[i].orientation.x;
+	diff2 = current_pose.pose.orientation.x - poses[i].orientation.x;
+	if (diff1 * diff2 < 0)
+		return true;
+	diff1 = poses[i-1].orientation.y - poses[i].orientation.y;
+	diff2 = current_pose.pose.orientation.y - poses[i].orientation.y;
+	if (diff1 * diff2 < 0)
+		return true;
+	diff1 = poses[i-1].orientation.z - poses[i].orientation.z;
+	diff2 = current_pose.pose.orientation.z - poses[i].orientation.z;
+	if (diff1 * diff2 < 0)
+		return true;
+	return false;
+}
+
 void replay_demo(int rateHertz) {
 	ros::Rate r(rateHertz);
 	for(int i = 0; i < cartesian_velocities.size(); i++) {
-		//velocityMsg.twist = cartesian_velocities[i].twist;
-		//velocityMsg.twist.linear.x = l_x;
-		//velocityMsg.twist.linear.y = l_y;
-		//velocityMsg.twist.linear.z = l_z;
-		
-		//velocityMsg.twist.angular.x = a_x;
-		//velocityMsg.twist.angular.y = a_y;
-		//velocityMsg.twist.angular.z = a_z;
-		//velocityMsg.twist.angular.w = a_w;
-		
-		//pub_velocity.publish(velocityMsg);
-		
-		std::cout << "Publishing velocity " << cartesian_velocities[i] << "\n";
-		pub_velocity.publish(cartesian_velocities[i]);
-		r.sleep();
+		std::cout << "\n\ni = " << i << "\n";
+		if (!zeroVelocity(cartesian_velocities[i])) {
+			std::cout << "Non zero velocities at " << i << "\n";
+		}
+		int num_replayed_same_vel = 0;
+		do {
+			// std::cout << "Publishing velocity " << cartesian_velocities[i] << "\n";
+			pub_velocity.publish(cartesian_velocities[i]);
+			r.sleep();
+			ros::spinOnce();
+			num_replayed_same_vel++;
+		} while(!poseMatch(i+1) && !zeroVelocity(cartesian_velocities[i]) && !overshot(i+1) && num_replayed_same_vel < 3);
+		if (poseMatch(i+1)) {
+			std::cout << "Pose match at i = " << i << "\n";
+		}
+		if (overshot(i+1)) {
+			std::cout << "Overshot at i = " << i << "\n";
+		}
 	}
 }
 
@@ -115,16 +182,16 @@ bool velocitiesSafe(geometry_msgs::TwistStamped velocityMsg) {
 	return true;
 }
 
-void splitAndAdd(geometry_msgs::TwistStamped velocityMsg) {
-	geometry_msgs::TwistStamped velocityMsg1, velocityMsg2;
-	velocityMsg1.twist.linear.x = velocityMsg2.twist.linear.x = velocityMsg.twist.linear.x / 2.0;
-	velocityMsg1.twist.linear.y = velocityMsg2.twist.linear.y = velocityMsg.twist.linear.y / 2.0;
-	velocityMsg1.twist.linear.z = velocityMsg2.twist.linear.z = velocityMsg.twist.linear.z / 2.0;
-	velocityMsg1.twist.angular.x = velocityMsg2.twist.angular.x = velocityMsg.twist.angular.x / 2.0;
-	velocityMsg1.twist.angular.y = velocityMsg2.twist.angular.y = velocityMsg.twist.angular.y / 2.0;
-	velocityMsg1.twist.angular.z = velocityMsg2.twist.angular.z = velocityMsg.twist.angular.z / 2.0;
-	cartesian_velocities.push_back(velocityMsg1);
-	cartesian_velocities.push_back(velocityMsg2);
+
+void halveAndAdd(geometry_msgs::TwistStamped velocityMsg) {
+	geometry_msgs::TwistStamped newVelocityMsg;
+	newVelocityMsg.twist.linear.x = velocityMsg.twist.linear.x / 2.0;
+	newVelocityMsg.twist.linear.y = velocityMsg.twist.linear.y / 2.0;
+	newVelocityMsg.twist.linear.z = velocityMsg.twist.linear.z / 2.0;
+	newVelocityMsg.twist.angular.x = velocityMsg.twist.angular.x / 2.0;
+	newVelocityMsg.twist.angular.y = velocityMsg.twist.angular.y / 2.0;
+	newVelocityMsg.twist.angular.z = velocityMsg.twist.angular.z / 2.0;
+	cartesian_velocities.push_back(newVelocityMsg);
 }
 
 
@@ -138,10 +205,10 @@ void findCartesianVelocities(int listenRateHertz) {
 		velocityMsg.twist.angular.y = (poses[i].orientation.y - poses[i-1].orientation.y) * listenRateHertz;
 		velocityMsg.twist.angular.z = (poses[i].orientation.z - poses[i-1].orientation.z) * listenRateHertz;
 		
-		if (velocitiesSafe(velocityMsg) {
+		if (velocitiesSafe(velocityMsg)) {
 			cartesian_velocities.push_back(velocityMsg);
 		} else {
-			splitAndAdd(velocityMsg);
+			halveAndAdd(velocityMsg);
 		}
 	}
 }
@@ -186,11 +253,13 @@ int main(int argc, char **argv) {
 	std::cout << "Move robot to start position and press Enter to start recording";
 	std::cin.get();
 
+	recording = true;
 	int listenRateHertz = 50;
 	ros::Rate r(listenRateHertz);
 	while (ros::ok() && !stopRecordingDemo) {
 		ros::spinOnce();
 	}
+	recording = false;
 
 	std::cout << "Stopped recording demo.\n";
 	std::cout << "Recorded " << poses.size() << " frames \n";
