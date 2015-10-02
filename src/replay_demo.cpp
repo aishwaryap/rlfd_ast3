@@ -83,6 +83,8 @@ void replay_demo(int rateHertz) {
 		//velocityMsg.twist.angular.w = a_w;
 		
 		//pub_velocity.publish(velocityMsg);
+		
+		std::cout << "Publishing velocity " << cartesian_velocities[i] << "\n";
 		pub_velocity.publish(cartesian_velocities[i]);
 		r.sleep();
 	}
@@ -104,6 +106,7 @@ void findCartesianVelocities(int listenRateHertz) {
 		velocityMsg.twist.angular.x = (poses[i].orientation.x - poses[i-1].orientation.x) * listenRateHertz;
 		velocityMsg.twist.angular.y = (poses[i].orientation.y - poses[i-1].orientation.y) * listenRateHertz;
 		velocityMsg.twist.angular.z = (poses[i].orientation.z - poses[i-1].orientation.z) * listenRateHertz;
+		cartesian_velocities.push_back(velocityMsg);
 	}
 }
 
@@ -152,6 +155,7 @@ int main(int argc, char **argv) {
 	}
 
 	std::cout << "Stopped recording demo.\n";
+	std::cout << "Recorded " << poses.size() << " frames \n";
 
 	angles_file.close();
 	torques_file.close();
@@ -160,5 +164,13 @@ int main(int argc, char **argv) {
 	
 	// Calculate velocities
 	findCartesianVelocities(listenRateHertz);
+	
+	std::cout << "Calculated Cartesian velocities. There are " << cartesian_velocities.size() << " velocities. \n";
+	
+	std::cout << "Move robot to start position and press enter to replay demo : ";
+	std::cin.get();
+	
 	replay_demo(listenRateHertz);
+	
+	std::cout << "Replayed demo...";
 }
