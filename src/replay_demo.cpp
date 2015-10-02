@@ -134,6 +134,8 @@ int main(int argc, char **argv) {
 	// Subscribe to the code that will publish a keyboard interrupt when the demo is over
 	ros::Subscriber sub = n.subscribe("keyboard_interrupt", 1000, keyboard_interrupt_cb);
 
+	//publish velocities
+	pub_velocity = n.advertise<geometry_msgs::TwistStamped>("/mico_arm_driver/in/cartesian_velocity", 10);
 
 	//subscriber for fingers
 	// ros::Subscriber sub_finger = n.subscribe("/mico_arm_driver/out/finger_position", 1, fingers_cb);
