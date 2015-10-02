@@ -149,19 +149,23 @@ include_directories(
 # add_executable(arm_demos_node src/arm_demos_node.cpp)
 
 ## Declare a cpp executable
-add_executable(copy src/copy.cpp)
-target_link_libraries(copy ${catkin_LIBRARIES} )
-add_dependencies(copy jaco_msgs_gencpp)
+#add_executable(copy src/copy.cpp)
+#target_link_libraries(copy ${catkin_LIBRARIES} )
+#add_dependencies(copy jaco_msgs_gencpp)
 
 ## Declare a cpp executable
-add_executable(agile_grasp_demo src/agile_grasp_demo.cpp)
-target_link_libraries(agile_grasp_demo ${catkin_LIBRARIES} )
-add_dependencies(agile_grasp_demo jaco_msgs_gencpp agile_grasp_gencpp)
+#add_executable(agile_grasp_demo src/agile_grasp_demo.cpp)
+#target_link_libraries(agile_grasp_demo ${catkin_LIBRARIES} )
+#add_dependencies(agile_grasp_demo jaco_msgs_gencpp agile_grasp_gencpp)
 
 ## Declare a cpp executable
 add_executable(replay_demo src/replay_demo.cpp)
 target_link_libraries(replay_demo ${catkin_LIBRARIES} )
 add_dependencies(replay_demo jaco_msgs_gencpp agile_grasp_gencpp)
+
+add_executable(replay_demo src/replay_demo.cpp)
+target_link_libraries(replay_demo ${catkin_LIBRARIES} )
+
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above

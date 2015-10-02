@@ -163,6 +163,10 @@ add_executable(replay_demo src/replay_demo.cpp)
 target_link_libraries(replay_demo ${catkin_LIBRARIES} )
 add_dependencies(replay_demo jaco_msgs_gencpp agile_grasp_gencpp)
 
+add_executable(keyboard_interrupt src/keyboard_interrupt.cpp)
+target_link_libraries(keyboard_interrupt ${catkin_LIBRARIES} )
+
+
 ## Add cmake target dependencies of the executable
 ## same as for the library above
 # add_dependencies(arm_demos_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

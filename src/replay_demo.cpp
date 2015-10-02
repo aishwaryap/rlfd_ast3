@@ -21,6 +21,7 @@ jaco_msgs::FingerPosition current_finger;
 geometry_msgs::PoseStamped current_pose;
 bool heardPose = false;
 bool heardJoinstState = false;
+bool stopRecordingDemo = false;
 
 ros::Publisher pub_velocity;
 
@@ -58,6 +59,12 @@ void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
 void fingers_cb (const jaco_msgs::FingerPosition msg) {
   current_finger = msg;
   finger_file << current_finger << "\n";
+}
+
+// Keyboard interrupt cb 
+void keyboard_interrupt_cb(const std_msgs::String::ConstPtr& msg) {
+  ROS_INFO("Going to stop recording demo...\n");
+  stopRecordingDemo = true;
 }
 
 // TODO: May have to change this data type based on in what form you 
@@ -120,6 +127,10 @@ int main(int argc, char **argv) {
 
 	//create subscriber to tool position topic - Cartesian end-effector position
 	ros::Subscriber sub_tool = n.subscribe("/mico_arm_driver/out/tool_position", 1, toolpos_cb);
+	
+	// Subscribe to the code that will publish a keyboard interrupt when the demo is over
+	ros::Subscriber sub = n.subscribe("keyboard_interrupt", 1000, keyboard_interrupt_cb);
+
 
 	//subscriber for fingers
 	// ros::Subscriber sub_finger = n.subscribe("/mico_arm_driver/out/finger_position", 1, fingers_cb);
@@ -132,15 +143,22 @@ int main(int argc, char **argv) {
 	//		to get velocities
 
 	std::cout << "Move robot to start position and press Enter to start recording";
+	std::cin.get();
 
-	ros::Rate r(50);
-	while (ros::ok()) {
-		ros::spin();
-		// Figure out some way to stop this
+	int listenRateHertz = 50;
+	ros::Rate r(listenRateHertz);
+	while (ros::ok() && !stopRecordingDemo) {
+		ros::spinOnce();
 	}
+
+	std::cout << "Stopped recording demo.\n";
 
 	angles_file.close();
 	torques_file.close();
 	tool_file.close();
 	finger_file.close();	
+	
+	// Calculate velocities
+	findCartesianVelocities(listenRateHertz);
+	replay_demo(listenRateHertz);
 }
