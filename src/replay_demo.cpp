@@ -13,6 +13,8 @@
 
 #define NUM_JOINTS 8 //6+2 for the arm
 
+#define VEL_THRESH = 5
+
 std::ofstream angles_file, torques_file, tool_file, finger_file;
 
 sensor_msgs::JointState current_state;
@@ -97,6 +99,35 @@ void pressEnter(){
 		std::cout << "Please press ENTER\n";
 }
 
+bool velocitiesSafe(geometry_msgs::TwistStamped velocityMsg) {
+	if (velocityMsg.twist.linear.x > VEL_THRESH)
+		return false;
+	if (velocityMsg.twist.linear.y > VEL_THRESH)
+		return false;
+	if (velocityMsg.twist.linear.z > VEL_THRESH)
+		return false;
+	if (velocityMsg.twist.angular.x > VEL_THRESH)
+		return false;
+	if (velocityMsg.twist.angular.y > VEL_THRESH)
+		return false;
+	if (velocityMsg.twist.angular.z > VEL_THRESH)
+		return false;
+	return true;
+}
+
+void splitAndAdd(geometry_msgs::TwistStamped velocityMsg) {
+	geometry_msgs::TwistStamped velocityMsg1, velocityMsg2;
+	velocityMsg1.twist.linear.x = velocityMsg2.twist.linear.x = velocityMsg.twist.linear.x / 2.0;
+	velocityMsg1.twist.linear.y = velocityMsg2.twist.linear.y = velocityMsg.twist.linear.y / 2.0;
+	velocityMsg1.twist.linear.z = velocityMsg2.twist.linear.z = velocityMsg.twist.linear.z / 2.0;
+	velocityMsg1.twist.angular.x = velocityMsg2.twist.angular.x = velocityMsg.twist.angular.x / 2.0;
+	velocityMsg1.twist.angular.y = velocityMsg2.twist.angular.y = velocityMsg.twist.angular.y / 2.0;
+	velocityMsg1.twist.angular.z = velocityMsg2.twist.angular.z = velocityMsg.twist.angular.z / 2.0;
+	cartesian_velocities.push_back(velocityMsg1);
+	cartesian_velocities.push_back(velocityMsg2);
+}
+
+
 void findCartesianVelocities(int listenRateHertz) {
 	for (int i=1; i<poses.size(); i++) {
 		geometry_msgs::TwistStamped velocityMsg;
@@ -106,7 +137,12 @@ void findCartesianVelocities(int listenRateHertz) {
 		velocityMsg.twist.angular.x = (poses[i].orientation.x - poses[i-1].orientation.x) * listenRateHertz;
 		velocityMsg.twist.angular.y = (poses[i].orientation.y - poses[i-1].orientation.y) * listenRateHertz;
 		velocityMsg.twist.angular.z = (poses[i].orientation.z - poses[i-1].orientation.z) * listenRateHertz;
-		cartesian_velocities.push_back(velocityMsg);
+		
+		if (velocitiesSafe(velocityMsg) {
+			cartesian_velocities.push_back(velocityMsg);
+		} else {
+			splitAndAdd(velocityMsg);
+		}
 	}
 }
 
