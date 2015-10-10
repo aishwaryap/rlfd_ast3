@@ -42,9 +42,9 @@ std::vector< double > s;
 std::vector< std::vector<double> > x;
 std::vector< std::vector<double> > v;
 std::vector< std::vector<double> > a;
-std::vector< std::vector<double> > f;
 std::vector< std::vector<double> > n;
 std::vector< std::vector<double> > n_dot;
+std::vector< std::vector<double> > f;
 
 std::vector< std::vector<double> > traj_x;
 std::vector< std::vector<double> > traj_v;
@@ -64,6 +64,15 @@ std::vector<double> g;
 
 visualization_msgs::MarkerArray marker_array;
 
+
+std::vector<double> get_zero_vector(int size) {
+	std::vector<double> zero(size);
+	for (int i=0; i<size; i++) {
+		zero[i] = 0;
+	}
+	return zero;
+}
+
 double magnitude_diff(std::vector<double> v1, std::vector<double> v2){
 	double diff = 0;
 	for (int i=0; i<7; i++) {
@@ -72,62 +81,11 @@ double magnitude_diff(std::vector<double> v1, std::vector<double> v2){
 	return sqrt(diff);
 }
 
-double translation_diff(std::vector<double> v1, std::vector<double> v2){
-	double diff = 0;
-	for (int i=0; i<3; i++) {
-		diff += (v1[i] - v2[i]) * (v1[i] - v2[i]);
-	}
-	return sqrt(diff);
-}
-
-void remove_redundant_points() {
-    std::vector<int> indices_to_remove;
-    for (int i=0; i<t.size(); i++) {
-        if (magnitude_diff(x[i], x[0]) < NEAR_ZERO) {
-            indices_to_remove.push_back(i);
-        }    
-    }
-    std::vector<int> end_indices_to_remove;
-    end_indices_to_remove.push_back(t.size()-1);
-    for (int i=t.size()-2; i>=0; i--) {
-        if (magnitude_diff(x[i], x[t.size()-2]) < NEAR_ZERO) {
-            end_indices_to_remove.push_back(i);
-        }    
-    }
-    for (int i=end_indices_to_remove.size()-1; i>=0; i--) {
-        indices_to_remove.push_back(end_indices_to_remove[i]);
-    }
-    
-    std::cout << "Indices to remove : ";
-    for (int j=0; j<indices_to_remove.size(); j++) {
-        std::cout << indices_to_remove[j] << " " ;
-    }
-    std::cout << "\n";
-    
-    std::vector< std::vector<double> > new_x;
-    std::vector<int> new_t;
-    int j = 0;
-    for (int i=0; i<t.size(); i++) {
-        if (i < indices_to_remove[j]) {
-            new_x.push_back(x[i]);
-            new_t.push_back(t[i]);
-        } else {
-            // This is an element to remove. Now search for the next one.
-            j++;
-        }
-    }
-    for (int i=0; i<new_t.size(); i++) {
-        new_t[i] -= new_t[0];
-    }
-    x = new_x;
-    t = new_t;
-}
-
 // This creates a marker point for rviz, given the position at which it should be
 visualization_msgs::Marker create_marker(std::vector<double> pose) {
 	static int id = 0;
 	visualization_msgs::Marker marker;
-	marker.header.frame_id = "/base_link";
+	marker.header.frame_id = "map";
 	marker.header.stamp = ros::Time::now();
 	marker.ns = "points";
 	marker.action = visualization_msgs::Marker::ADD;
@@ -149,29 +107,13 @@ visualization_msgs::Marker create_marker(std::vector<double> pose) {
 	return marker;
 }
 
-std::vector<double> get_pose_vector(geometry_msgs::PoseStamped pose) {
-    std::vector<double> cur_x(7);
-    cur_x[0] = pose.pose.position.x;
-    cur_x[1] = pose.pose.position.y;
-    cur_x[2] = pose.pose.position.z;
-    cur_x[3] = pose.pose.orientation.x;
-    cur_x[4] = pose.pose.orientation.y;
-    cur_x[5] = pose.pose.orientation.z;
-    cur_x[6] = pose.pose.orientation.w;
-    return cur_x;
-}
-
 double calc_s(double t) {
     return exp(- alpha * t / tau);
 }
 
-void push_current_pose() {
-    x.push_back(get_pose_vector(current_pose));
-}
-
 void set_x_0_and_g() {
     x_0 = x[0];
-    g = x[x.size() - 1];
+    g = x[x.size() - 2];
 }
 
 bool near_zero_vel(std::vector<double> velocity) {
@@ -241,54 +183,6 @@ int get_time_diff_ms(timeval tv) {
             (tv.tv_usec - start_of_demo.tv_usec)/1000 );
 }
 
-int get_last_pose_time_ms() {
-    return get_time_diff_ms(current_pose_timestamp);
-}
-
-int get_cur_time_ms() {
-    timeval cur_time;
-    gettimeofday(&cur_time, NULL);   
-    return get_time_diff_ms(cur_time);
-}
-
-void push_current_time() {
-    t.push_back(get_last_pose_time_ms());
-}
-
-//Joint state cb
-void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
-    prev_pose_timestamp = current_pose_timestamp;
-    gettimeofday(&current_pose_timestamp, NULL);   
-    prev_pose = current_pose;
-    current_pose = msg;
-    if (recording) {
-        push_current_time();
-        push_current_pose();
-    }
-    heardPose = true;
-    //std::cout << "Heard pose\n";
-}
-
-// Keyboard interrupt cb 
-void keyboard_interrupt_cb(const std_msgs::String::ConstPtr& msg) {
-  ROS_INFO("Going to stop recording demo...\n");
-  stopRecordingDemo = true;
-}
-
-bool reached_goal(){
-	std::cout << "In reached goal \n";
-    std::vector<double> cur_pose = get_pose_vector(current_pose);
-    std::cout << "In reached goal before loop...\n";
-    for (int i=0; i<7; i++) {
-        if (abs(cur_pose[i] - g[i]) > POSE_DIFF_THRESH) {
-			std::cout << "Mismatch at index " << i << "\n";
-            return false;        
-		}
-    }
-    std::cout << "Going to return true\n";
-	return true;
-}
-
 std::vector<double> calc_f(double cur_s) {
     if (cur_s <= s[0]) {
         return f[0];
@@ -326,26 +220,12 @@ geometry_msgs::TwistStamped get_velocity_msg(std::vector<double> velocities) {
 }
 
 std::vector<double> make_velocities_safe(std::vector<double> velocities) {
-    bool safe = false;
-    while (!safe) {
-        safe = true;
-        for (int i=0; i<7; i++) {
-            if (abs(velocities[i]) > VEL_THRESH) {
-                safe = false;
-                break;
-            }
-        }
-        if (!safe) {
-            for (int i=0; i<7; i++) {
-                velocities[i] /= 2;
-            }
-        }
+    if (magnitude_diff(velocities, get_zero_vector(7)) > VEL_THRESH) {
+        std::cout << "Dangerous!!!";
     }
-    std::cout << "Returning velocities: ";
     for (int i=0; i<7; i++) {
-		std::cout << velocities[i] << " ";
+		velocities[i] /= 2;
 	}
-	std::cout << "\n";
     return velocities;
 }
 
@@ -353,101 +233,18 @@ std::vector<double> normalize_quaternion(std::vector<double> quaternion) {
 	double magnitude = quaternion[3] + quaternion[4] + quaternion[5] + quaternion[6];
     std::vector<double> normalized_quaternion = std::vector<double>(quaternion);
     for (int i=3; i<7; i++) {
-        normalized_quaternion[i] /= magnitude ;
+        //normalized_quaternion[i] /= magnitude ;
+        normalized_quaternion[i] = 0;
     }
     return normalized_quaternion;
 }
 
-void replay_demo(int rateHertz) {
-	ros::Rate r(rateHertz);
-    gettimeofday(&start_of_demo, NULL); 
-    std::cout << "Here...\n";
-    while (!reached_goal()) {
-		std::cout << "Start of replay loop...\n";
-        std::vector<double> cur_x = get_pose_vector(current_pose);
-        std::vector<double> prev_x = get_pose_vector(prev_pose);        
-        std::vector<double> cur_v(7);
-        std::cout << "Calculated current velocity...\n";
-        
-        double cur_t = get_time_diff_ms(current_pose_timestamp);
-        double cur_s = calc_s(cur_t);
-        
-        std::cout << "Before for loop...\n";
-        for (int i=0; i<7; i++) {
-            cur_v[i] = (cur_x[i] - prev_x[i]) 
-                / (cur_t - get_time_diff_ms(prev_pose_timestamp));
-        }
-        
-        std::vector<double> cur_f = calc_f(cur_s);
-        std::vector<double> desired_a(7), desired_v(7);
-        std::cout << "Before next for loop...\n";
-        for (int i=0; i<7; i++) {
-            desired_a[i] = (K * (g[i] - cur_x[i]) - D * cur_v[i] - 
-                K * (g[i] - x_0[i]) * cur_s + K * cur_f[i]) / tau;
-            desired_v[i] = cur_v[i] + desired_a[i] * (1000 / rateHertz);
-        }
-        
-        std::cout << "Before normalization...\n";
-        desired_v = normalize_quaternion(desired_v);
-        //std::cout << "Before safety...\n";
-        //desired_v = make_velocities_safe(desired_v);
-        
-        std::cout << "Going to publish velocities: ";
-		for (int i=0; i<7; i++) {
-			std::cout << desired_v[i] << " ";
-		}
-		std::cout << "\n";
-        
-        if (!near_zero_vel(desired_v)) {
-			std::cout << "Converting to message...\n";
-			geometry_msgs::TwistStamped velocity_msg = get_velocity_msg(desired_v);
-			std::cout << "Going to publish...\n";
-			pub_velocity.publish(velocity_msg);
-			std::cout << "Published " << velocity_msg << "\n";
-			r.sleep();
-			std::cout << "Came out of sleep\n";
-			ros::spinOnce();
-			std::cout << "End of loop\n";
-		} else {
-			std::cout << "Not publishing zero velocity...\n";
-		}
-    }
-}
-
-std::vector<double> get_zero_vector(int size) {
-	std::vector<double> zero(size);
-	for (int i=0; i<size; i++) {
-		zero[i] = 0;
+double translation_diff(std::vector<double> v1, std::vector<double> v2){
+	double diff = 0;
+	for (int i=0; i<3; i++) {
+		diff += (v1[i] - v2[i]) * (v1[i] - v2[i]);
 	}
-	return zero;
-}
-
-void replay_calculated_trajectory(int rateHertz) {
-	ros::Rate r(rateHertz);
-	
-	//int freq_to_use = (1000/rateHertz) / TRAJ_TIME_STEP;
-	
-	for (int i=0; i<traj_v.size(); i++) {
-		std::cout << "Going to publish velocities: ";
-		for (int j=0; j<7; j++) {
-			std::cout << traj_v[i][j] << " ";
-		}
-		std::cout << "\n";
-        
-        //if (!near_zero_vel(traj_v[i])) {
-			std::cout << "Converting to message...\n";
-			geometry_msgs::TwistStamped velocity_msg = get_velocity_msg(traj_v[i]);
-			std::cout << "Going to publish...\n";
-			pub_velocity.publish(velocity_msg);
-			std::cout << "Published " << velocity_msg << "\n";
-			r.sleep();
-			std::cout << "Came out of sleep\n";
-			ros::spinOnce();
-			std::cout << "End of loop\n";
-		//} else {
-			//std::cout << "Not publishing zero velocity...\n";
-		//}
-	}
+	return sqrt(diff);
 }
 
 void calculate_trajectory() {
@@ -456,8 +253,8 @@ void calculate_trajectory() {
 	double cur_t, cur_s;
 	bool first_point = true;
 	
-    double delta_t = 1000.0 / ROS_RATE;
-    //double delta_t = 20;
+    //double delta_t = 1000.0 / ROS_RATE;
+    double delta_t = 20;
     std::cout << "delta_t = " << delta_t << "\n";
     std::cout << "K = " << K << "\n";
     
@@ -535,60 +332,202 @@ void calculate_trajectory() {
     }
 }
 
+void remove_redundant_points() {
+    std::vector<int> indices_to_remove;
+    for (int i=0; i<t.size(); i++) {
+        if (magnitude_diff(x[i], x[0]) < NEAR_ZERO) {
+            indices_to_remove.push_back(i);
+        }    
+    }
+    std::vector<int> end_indices_to_remove;
+    end_indices_to_remove.push_back(t.size()-1);
+    for (int i=t.size()-2; i>=0; i--) {
+        if (magnitude_diff(x[i], x[t.size()-2]) < NEAR_ZERO) {
+            end_indices_to_remove.push_back(i);
+        }    
+    }
+    for (int i=end_indices_to_remove.size()-1; i>=0; i--) {
+        indices_to_remove.push_back(end_indices_to_remove[i]);
+    }
+    
+    std::cout << "Indices to remove : ";
+    for (int j=0; j<indices_to_remove.size(); j++) {
+        std::cout << indices_to_remove[j] << " " ;
+    }
+    std::cout << "\n";
+    
+    std::vector< std::vector<double> > new_x;
+    std::vector<int> new_t;
+    int j = 0;
+    for (int i=0; i<t.size(); i++) {
+        if (i < indices_to_remove[j]) {
+            new_x.push_back(x[i]);
+            new_t.push_back(t[i]);
+        } else {
+            // This is an element to remove. Now search for the next one.
+            j++;
+        }
+    }
+    for (int i=0; i<new_t.size(); i++) {
+        new_t[i] -= new_t[0];
+    }
+    x = new_x;
+    t = new_t;
+}
+
 int main(int argc, char **argv) {
 	// Intialize ROS with this node name
 	ros::init(argc, argv, "subscriber");
 	
 	ros::NodeHandle n;
-	
+
+    ros::AsyncSpinner spinner(1);
+    spinner.start();	
 	//create subscriber to tool position topic - Cartesian end-effector position
-	ros::Subscriber sub_tool = n.subscribe("/mico_arm_driver/out/tool_position", 1, toolpos_cb);
+	//ros::Subscriber sub_tool = n.subscribe("/mico_arm_driver/out/tool_position", 1, toolpos_cb);
 	
 	// Subscribe to the code that will publish a keyboard interrupt when the demo is over
-	ros::Subscriber sub = n.subscribe("keyboard_interrupt", 1000, keyboard_interrupt_cb);
+	//ros::Subscriber sub = n.subscribe("keyboard_interrupt", 1000, keyboard_interrupt_cb);
 
 	//publish velocities
-	pub_velocity = n.advertise<geometry_msgs::TwistStamped>("/mico_arm_driver/in/cartesian_velocity", 10);
+	//pub_velocity = n.advertise<geometry_msgs::TwistStamped>("/mico_arm_driver/in/cartesian_velocity", 10);
 
-	std::cout << "Move robot to start position and press Enter to start recording";
-	std::cin.get();
-	std::cout << "Recording demo. Press enter in the keyboard interrupter to stop...\n";
+	//std::cout << "Move robot to start position and press Enter to start recording";
+	//std::cin.get();
+	//std::cout << "Recording demo. Press enter in the keyboard interrupter to stop...\n";
 
 	// Publisher to publish in RViz
 	ros::Publisher marker_pub =  
 		n.advertise<visualization_msgs::MarkerArray>("visualization_marker_array", 10);
-	
-	recording = true;
-	int listenRateHertz = 50;
-	ros::Rate r(listenRateHertz);
-    gettimeofday(&start_of_demo, NULL); 
-	while (ros::ok() && !stopRecordingDemo) {
-		ros::spinOnce();
-	}
-    tau = get_last_pose_time_ms();
-	recording = false;
 
-	std::cout << "Stopped recording demo.\n";
-	std::cout << "Recorded " << x.size() << " frames\n";
+    std::cout << "Enter K: ";
+    std::cin >> K;
+
+    // Read demonstrated trajectory from file
+    std::ifstream my_file; 
+    my_file.open("Trajectory.csv");
+    double val;
+    while (!my_file.eof()) {
+        std::vector<double> pose;
+        for (int i=0; i<7; i++) {
+            my_file >> val;
+            //std::cout << "Read " << val << " from Trajectory.csv\n";
+            //std::cin.get();
+            pose.push_back(val);
+        }
+        x.push_back(pose);
+    }
+
+    int time_val;
+    std::ifstream time_file;
+    time_file.open("Time.txt");
+    while(!time_file.eof()) {
+        time_file >> time_val;
+        //std::cout << "Read " << time_val << " from Time.txt\n";
+        t.push_back(time_val);
+    }
+    tau = time_val;
+
+    set_x_0_and_g();
     
-    if (x.size() != t.size()) {
-        std::cout << "x.size() = " << x.size() << ", t.size() = " << t.size() << "\n";
-        exit(1);
-    } 
-    
+    std::cout << "Finished reading files...\n";
+    std::cout << "x.size() = " << x.size() << "\n";
+    std::cout << "t.size() = " << t.size() << "\n";
+
     remove_redundant_points();
 
     std::cout << "Removing redundant points.. \n";
     std::cout << "x.size() = " << x.size() << "\n";
     std::cout << "t.size() = " << t.size() << "\n";
 
+    learn_dmp();
+    
+    std::cout << "Calculated DMP values - \n";
+    
+    //for (int i=0; i<t.size(); i++) {
+        //std::cout << "s[" << i << "] = " << s[i] << "\n";
+        //std::cout << "x[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << x[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "v[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << v[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "a[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << a[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "f[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << f[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "d = " << magnitude_diff(x[i], g) << "\n";
+        //std::cout << "\n\n";
+    //}
+    
     set_x_0_and_g();
-	learn_dmp();
     
     calculate_trajectory();
+
     std::cout << "Calculated trajectory - \n";
     std::cout << "traj_x.size() = " << traj_x.size() << "\n";
     std::cout << "Distance of last point to goal: " << translation_diff(traj_x[traj_x.size() - 1], g) << "\n";
+    
+    //for (int i=0; i<traj_x.size(); i++) {
+        //std::cout << "s[" << i << "] = " << s[i] << "\n";
+        //std::cout << "traj_x[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << traj_x[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "traj_v[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << traj_v[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "traj_a[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << traj_a[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "traj_f[" << i << "] = ";
+        //for (int j=0; j<7; j++) {
+            //std::cout << traj_f[i][j] << " " ;
+        //}
+        //std::cout << "\n";
+        //std::cout << "d = " << magnitude_diff(x[i], g) << "\n";
+        //std::cout << "\n\n";
+    //}
+    
+    
+    
+	//recording = true;
+	//int listenRateHertz = 50;
+	//ros::Rate r(listenRateHertz);
+    //gettimeofday(&start_of_demo, NULL); 
+	//while (ros::ok() && !stopRecordingDemo) {
+		//ros::spinOnce();
+	//}
+    //tau = get_last_pose_time_ms() / 1000;
+	//recording = false;
+
+	//std::cout << "Stopped recording demo.\n";
+	//std::cout << "Recorded " << x.size() << " frames\n";
+    
+    //if (x.size() != t.size()) {
+        //std::cout << "x.size() = " << x.size() << ", t.size() = " << t.size() << "\n";
+        //exit(1);
+    //} 
+    
+    //set_x_0_and_g();
+	//learn_dmp();
+    
+    //calculate_trajectory();
     
     // Adjust colors of rviz markers so that they fade from green to red
 	int num_points = traj_x.size();
@@ -596,7 +535,7 @@ int main(int argc, char **argv) {
 	float r_amount = 0.0;
 	float per_point_color_diff = 1.0 / num_points;
 	for (int point_num = 0; point_num <= num_points; point_num++) {
-		marker_array.markers[point_num].color.g = g_amount;
+        marker_array.markers[point_num].color.g = g_amount;
 		marker_array.markers[point_num].color.r = r_amount;
 		g_amount -= per_point_color_diff;
 		r_amount += per_point_color_diff;
@@ -604,13 +543,18 @@ int main(int argc, char **argv) {
 	// Display points in rviz
 	marker_pub.publish(marker_array);
     
-    // Reset tau for desired duration of demo
+    while (ros::ok()) {
+        ros::spinOnce();
+    }
     
-	std::cout << "Move robot to start position and press enter to replay demo : ";
-	std::cin.get();
+    std::cout << "Exiting program...\n";    
+    //// Reset tau for desired duration of demo
+    
+	//std::cout << "Move robot to start position and press enter to replay demo : ";
+	//std::cin.get();
 	
-	//replay_demo(listenRateHertz);
-	replay_calculated_trajectory(listenRateHertz);
+	////replay_demo(listenRateHertz);
+	//replay_calculated_trajectory(listenRateHertz);
 	
-	std::cout << "Replayed demo...";
+	//std::cout << "Replayed demo...";
 }
