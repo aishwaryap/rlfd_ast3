@@ -174,9 +174,9 @@ void learn_dmp() {
             }    
             n[i][j] = tau * v[i][j];
             n_dot[i][j] = tau * a[i][j];
-            f[i][j] = ((tau * n_dot[i][j]) - (D * n[i][j])) / K
+            f[i][j] = ((tau * n_dot[i][j]) + (D * n[i][j])) / K
                         + (g[j] - x_0[j]) * s[i]
-                        + (g[j] - x[i][j]);
+                        - (g[j] - x[i][j]);
         }
         //std::cout << "\n";
     }

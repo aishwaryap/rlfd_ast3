@@ -48,6 +48,7 @@ std::vector< std::vector<double> > n_dot;
 
 std::vector< std::vector<double> > traj_x;
 std::vector< std::vector<double> > traj_v;
+std::vector< std::vector<double> > traj_n;
 std::vector< std::vector<double> > traj_a;
 std::vector< std::vector<double> > traj_f;
 
@@ -88,8 +89,9 @@ void remove_redundant_points() {
         }    
     }
     std::vector<int> end_indices_to_remove;
-    for (int i=t.size()-1; i>=0; i--) {
-        if (magnitude_diff(x[i], x[t.size()-1]) < NEAR_ZERO) {
+    end_indices_to_remove.push_back(t.size()-1);
+    for (int i=t.size()-2; i>=0; i--) {
+        if (magnitude_diff(x[i], x[t.size()-2]) < NEAR_ZERO) {
             end_indices_to_remove.push_back(i);
         }    
     }
@@ -175,7 +177,7 @@ void set_x_0_and_g() {
 
 bool near_zero_vel(std::vector<double> velocity) {
 	double magnitude = 0;
-	for (int i=0; i<7; i++) {
+	for (int i=0; i<3; i++) {
 		magnitude += (velocity[i] * velocity[i]);
 	}
 	magnitude = sqrt(magnitude);
@@ -226,9 +228,9 @@ void learn_dmp() {
             }    
             n[i][j] = tau * v[i][j];
             n_dot[i][j] = tau * a[i][j];
-            f[i][j] = ((tau * n_dot[i][j]) - (D * n[i][j])) / K
+            f[i][j] = ((tau * n_dot[i][j]) + (D * n[i][j])) / K
                         + (g[j] - x_0[j]) * s[i]
-                        + (g[j] - x[i][j]);
+                        - (g[j] - x[i][j]);
         }
         //std::cout << "\n";
     }
@@ -325,26 +327,12 @@ geometry_msgs::TwistStamped get_velocity_msg(std::vector<double> velocities) {
 }
 
 std::vector<double> make_velocities_safe(std::vector<double> velocities) {
-    bool safe = false;
-    while (!safe) {
-        safe = true;
+    while (translation_diff(velocities, get_zero_vector(7)) > VEL_THRESH) {
+        std::cout << "Dangerous!!!";
         for (int i=0; i<7; i++) {
-            if (abs(velocities[i]) > VEL_THRESH) {
-                safe = false;
-                break;
-            }
-        }
-        if (!safe) {
-            for (int i=0; i<7; i++) {
-                velocities[i] /= 2;
-            }
-        }
+			velocities[i] /= 2;
+		}
     }
-    std::cout << "Returning velocities: ";
-    for (int i=0; i<7; i++) {
-		std::cout << velocities[i] << " ";
-	}
-	std::cout << "\n";
     return velocities;
 }
 
@@ -356,62 +344,6 @@ std::vector<double> normalize_quaternion(std::vector<double> quaternion) {
         normalized_quaternion[i] = 0;
     }
     return normalized_quaternion;
-}
-
-void replay_demo(int rateHertz) {
-	ros::Rate r(rateHertz);
-    gettimeofday(&start_of_demo, NULL); 
-    std::cout << "Here...\n";
-    while (!reached_goal()) {
-		std::cout << "Start of replay loop...\n";
-        std::vector<double> cur_x = get_pose_vector(current_pose);
-        std::vector<double> prev_x = get_pose_vector(prev_pose);        
-        std::vector<double> cur_v(7);
-        std::cout << "Calculated current velocity...\n";
-        
-        double cur_t = get_time_diff(current_pose_timestamp);
-        double cur_s = calc_s(cur_t);
-        
-        std::cout << "Before for loop...\n";
-        for (int i=0; i<7; i++) {
-            cur_v[i] = (cur_x[i] - prev_x[i]) 
-                / (cur_t - get_time_diff(prev_pose_timestamp));
-        }
-        
-        std::vector<double> cur_f = calc_f(cur_s);
-        std::vector<double> desired_a(7), desired_v(7);
-        std::cout << "Before next for loop...\n";
-        for (int i=0; i<7; i++) {
-            desired_a[i] = (K * (g[i] - cur_x[i]) - D * cur_v[i] - 
-                K * (g[i] - x_0[i]) * cur_s + K * cur_f[i]) / tau;
-            desired_v[i] = cur_v[i] + desired_a[i] * (1000 / rateHertz);
-        }
-        
-        std::cout << "Before normalization...\n";
-        desired_v = normalize_quaternion(desired_v);
-        //std::cout << "Before safety...\n";
-        //desired_v = make_velocities_safe(desired_v);
-        
-        std::cout << "Going to publish velocities: ";
-		for (int i=0; i<7; i++) {
-			std::cout << desired_v[i] << " ";
-		}
-		std::cout << "\n";
-        
-        if (!near_zero_vel(desired_v)) {
-			std::cout << "Converting to message...\n";
-			geometry_msgs::TwistStamped velocity_msg = get_velocity_msg(desired_v);
-			std::cout << "Going to publish...\n";
-			pub_velocity.publish(velocity_msg);
-			std::cout << "Published " << velocity_msg << "\n";
-			r.sleep();
-			std::cout << "Came out of sleep\n";
-			ros::spinOnce();
-			std::cout << "End of loop\n";
-		} else {
-			std::cout << "Not publishing zero velocity...\n";
-		}
-    }
 }
 
 std::vector<double> get_zero_vector(int size) {
@@ -464,6 +396,8 @@ void calculate_trajectory() {
 	traj_a = empty_vector3;
 	std::vector< std::vector<double> > empty_vector4;
 	traj_f = empty_vector4;
+	std::vector< std::vector<double> > empty_vector5;
+	traj_n = empty_vector5;
 	
 	std::vector<double> cur_x = x_0, prev_x, cur_v, cur_f, cur_a, 
         next_v, cur_n, cur_n_dot, next_x, next_n;
@@ -519,7 +453,7 @@ void calculate_trajectory() {
        
         next_v = normalize_quaternion(next_v);
         //std::cout << "Before safety...\n";
-        //desired_v = make_velocities_safe(desired_v);
+        next_v = make_velocities_safe(next_v);
 
 		//std::cout << "next_v: ";
 		//for (int i=0; i<7; i++) {
@@ -541,6 +475,7 @@ void calculate_trajectory() {
         traj_v.push_back(cur_v);
         traj_a.push_back(cur_a);
         traj_f.push_back(cur_f);
+        traj_n.push_back(cur_n);
         
         prev_x = cur_x;
         cur_x = next_x;
@@ -580,15 +515,14 @@ int main(int argc, char **argv) {
 		n.advertise<visualization_msgs::MarkerArray>("visualization_marker_array", 10);
 	
 	recording = true;
-	int listenRateHertz = 50;
-	ros::Rate r(listenRateHertz);
+	ros::Rate r(ROS_RATE);
     gettimeofday(&start_of_demo, NULL); 
 	while (ros::ok() && !stopRecordingDemo) {
 		ros::spinOnce();
 	}
 	recording = false;
 
-	convert_time_to_sec();
+	//convert_time_to_sec();
 
 	std::cout << "Stopped recording demo.\n";
 	std::cout << "Recorded " << x.size() << " frames\n";
@@ -644,7 +578,7 @@ int main(int argc, char **argv) {
 	std::cin.get();
 	
 	//replay_demo(listenRateHertz);
-	replay_calculated_trajectory(listenRateHertz);
+	replay_calculated_trajectory(ROS_RATE);
 	
 	std::cout << "Replayed demo...";
 }
