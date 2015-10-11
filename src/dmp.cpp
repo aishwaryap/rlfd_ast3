@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sys/time.h>
 #include <cmath>
+#include <random>
 
 #include <sensor_msgs/JointState.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -29,6 +30,7 @@
 
 geometry_msgs::PoseStamped current_pose;
 geometry_msgs::PoseStamped prev_pose;
+geometry_msgs::PoseStamped replay_end_pose;
 
 bool heardPose = false;
 bool stopRecordingDemo = false;
@@ -45,6 +47,7 @@ std::vector< std::vector<double> > a;
 std::vector< std::vector<double> > f;
 std::vector< std::vector<double> > n;
 std::vector< std::vector<double> > n_dot;
+std::vector< std::vector<double> > f_backup;
 
 std::vector< std::vector<double> > traj_x;
 std::vector< std::vector<double> > traj_v;
@@ -64,6 +67,9 @@ std::vector<double> x_0;
 std::vector<double> g;
 
 visualization_msgs::MarkerArray marker_array;
+
+std::default_random_engine generator;
+std::normal_distribution<double> distribution(0,1.0);
 
 double magnitude_diff(std::vector<double> v1, std::vector<double> v2){
 	double diff = 0;
@@ -270,6 +276,36 @@ void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
     std::cout << "Heard pose\n";
 }
 
+double get_rl_reward() {
+	return -translation_diff(g, get_pose_vector(replay_end_pose));
+}
+
+void perturb_parameters() {
+	f_backup = f;
+	for (int i=0; i<f.size(); i++) {
+		double noise = distribution(generator);
+		f[i] += noise;
+	}
+}
+
+void improve_via_rl() {
+	std::cout << "Ener no of trials : ";
+	int N;
+	std::cin >> N;
+	double prev_reward = get_rl_reward();
+	for (int i=0; i<N; i++) {
+		perturb_parameters();
+		calculate_trajectory();
+		std::cout << "Move robot to start position and press enter to start playing. \n";
+		std::cin.get();
+		replay_calculated_trajectory();
+		double reward = get_rl_reward();
+		if (reward < prev_reward) {
+			f = f_backup;
+		}
+	}
+}
+
 // Keyboard interrupt cb 
 void keyboard_interrupt_cb(const std_msgs::String::ConstPtr& msg) {
   ROS_INFO("Going to stop recording demo...\n");
@@ -385,6 +421,8 @@ void replay_calculated_trajectory(int rateHertz) {
 	pub_velocity.publish(zero_velocity_msg);
 	r.sleep();
 	ros::spinOnce();
+	
+	replay_end_pose = current_pose;
 }
 
 void calculate_trajectory() {
