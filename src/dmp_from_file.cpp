@@ -20,10 +20,10 @@
 
 #define NUM_JOINTS 8 //6+2 for the arm
 
-#define VEL_THRESH 0.1
+#define VEL_THRESH 0.5
 #define POSE_DIFF_THRESH 0.001
 #define abs(x) x>0?x:-x
-#define NEAR_ZERO_VEL 0.0001
+#define NEAR_ZERO_VEL 0.001
 #define ROS_RATE 50
 #define NEAR_ZERO 0.000001
 
@@ -37,7 +37,7 @@ bool recording = false;
 ros::Publisher pub_velocity;
 
 // Vectors to be used by the DMP
-std::vector< int > t;
+std::vector< double > t;
 std::vector< double > s;
 std::vector< std::vector<double> > x;
 std::vector< std::vector<double> > v;
@@ -64,6 +64,11 @@ std::vector<double> g;
 
 visualization_msgs::MarkerArray marker_array;
 
+void convert_time_to_sec() {
+	for (int i=0; i<t.size();i++) {
+		t[i] /= 1000;
+	}
+}
 
 std::vector<double> get_zero_vector(int size) {
 	std::vector<double> zero(size);
@@ -85,7 +90,7 @@ double magnitude_diff(std::vector<double> v1, std::vector<double> v2){
 visualization_msgs::Marker create_marker(std::vector<double> pose) {
 	static int id = 0;
 	visualization_msgs::Marker marker;
-	marker.header.frame_id = "map";
+	marker.header.frame_id = "level_mux/map";
 	marker.header.stamp = ros::Time::now();
 	marker.ns = "points";
 	marker.action = visualization_msgs::Marker::ADD;
@@ -118,7 +123,7 @@ void set_x_0_and_g() {
 
 bool near_zero_vel(std::vector<double> velocity) {
 	double magnitude = 0;
-	for (int i=0; i<7; i++) {
+	for (int i=0; i<3; i++) {
 		magnitude += (velocity[i] * velocity[i]);
 	}
 	magnitude = sqrt(magnitude);
@@ -254,7 +259,8 @@ void calculate_trajectory() {
 	bool first_point = true;
 	
     //double delta_t = 1000.0 / ROS_RATE;
-    double delta_t = 20;
+    double delta_t = 1.0 / ROS_RATE;
+    //double delta_t = 20;
     std::cout << "delta_t = " << delta_t << "\n";
     std::cout << "K = " << K << "\n";
     
@@ -357,7 +363,7 @@ void remove_redundant_points() {
     std::cout << "\n";
     
     std::vector< std::vector<double> > new_x;
-    std::vector<int> new_t;
+    std::vector<double> new_t;
     int j = 0;
     for (int i=0; i<t.size(); i++) {
         if (i < indices_to_remove[j]) {
@@ -375,14 +381,59 @@ void remove_redundant_points() {
     t = new_t;
 }
 
+void replay_calculated_trajectory(int rateHertz) {
+	ros::Rate r(rateHertz);
+	
+	//int freq_to_use = (1000/rateHertz) / TRAJ_TIME_STEP;
+	
+	for (int i=0; i<traj_v.size(); i++) {
+		std::cout << "Going to publish velocities: ";
+		for (int j=0; j<7; j++) {
+			std::cout << traj_v[i][j] << " ";
+		}
+		std::cout << "\n";
+        
+        if (!near_zero_vel(traj_v[i])) {
+			std::cout << "Converting to message...\n";
+			geometry_msgs::TwistStamped velocity_msg = get_velocity_msg(traj_v[i]);
+			std::cout << "Going to publish \n" << velocity_msg << "\n";
+			pub_velocity.publish(velocity_msg);
+			r.sleep();
+			ros::spinOnce();
+			std::cout << "Came out of sleep\n";
+			
+			std::cout << "\nExpected current pose: ";
+			for (int k=0; k<3; k++) {
+				std::cout << traj_x[i][k] << " ";
+			}
+			std::cout << "\nGoal: ";
+			for (int k=0; k<3; k++) {
+				std::cout << g[k] << " ";
+			}
+			std::cout << "\n\n";
+			
+			
+			std::cout << "End of loop\n";
+		} else {
+			std::cout << "Not publishing zero velocity...\n";
+		}
+	}
+	
+	geometry_msgs::TwistStamped zero_velocity_msg = get_velocity_msg(get_zero_vector(7));
+	pub_velocity.publish(zero_velocity_msg);
+	r.sleep();
+	ros::spinOnce();
+	
+}
+
 int main(int argc, char **argv) {
 	// Intialize ROS with this node name
 	ros::init(argc, argv, "subscriber");
 	
 	ros::NodeHandle n;
 
-    ros::AsyncSpinner spinner(1);
-    spinner.start();	
+    //ros::AsyncSpinner spinner(1);
+    //spinner.start();	
 	//create subscriber to tool position topic - Cartesian end-effector position
 	//ros::Subscriber sub_tool = n.subscribe("/mico_arm_driver/out/tool_position", 1, toolpos_cb);
 	
@@ -390,7 +441,7 @@ int main(int argc, char **argv) {
 	//ros::Subscriber sub = n.subscribe("keyboard_interrupt", 1000, keyboard_interrupt_cb);
 
 	//publish velocities
-	//pub_velocity = n.advertise<geometry_msgs::TwistStamped>("/mico_arm_driver/in/cartesian_velocity", 10);
+	pub_velocity = n.advertise<geometry_msgs::TwistStamped>("/mico_arm_driver/in/cartesian_velocity", 10);
 
 	//std::cout << "Move robot to start position and press Enter to start recording";
 	//std::cin.get();
@@ -426,10 +477,9 @@ int main(int argc, char **argv) {
         //std::cout << "Read " << time_val << " from Time.txt\n";
         t.push_back(time_val);
     }
-    tau = time_val;
-
-    set_x_0_and_g();
     
+	convert_time_to_sec();
+
     std::cout << "Finished reading files...\n";
     std::cout << "x.size() = " << x.size() << "\n";
     std::cout << "t.size() = " << t.size() << "\n";
@@ -439,6 +489,10 @@ int main(int argc, char **argv) {
     std::cout << "Removing redundant points.. \n";
     std::cout << "x.size() = " << x.size() << "\n";
     std::cout << "t.size() = " << t.size() << "\n";
+
+	set_x_0_and_g();
+	tau = t[t.size() - 1];
+	std::cout << "tau = " << tau << "\n";
 
     learn_dmp();
     
@@ -469,8 +523,6 @@ int main(int argc, char **argv) {
         //std::cout << "d = " << magnitude_diff(x[i], g) << "\n";
         //std::cout << "\n\n";
     //}
-    
-    set_x_0_and_g();
     
     calculate_trajectory();
 
@@ -543,18 +595,14 @@ int main(int argc, char **argv) {
 	// Display points in rviz
 	marker_pub.publish(marker_array);
     
-    while (ros::ok()) {
-        ros::spinOnce();
-    }
-    
     std::cout << "Exiting program...\n";    
     //// Reset tau for desired duration of demo
     
-	//std::cout << "Move robot to start position and press enter to replay demo : ";
-	//std::cin.get();
+	std::cout << "Move robot to start position and press enter to replay demo : ";
+	std::cin.get();
 	
 	////replay_demo(listenRateHertz);
-	//replay_calculated_trajectory(listenRateHertz);
+	replay_calculated_trajectory(ROS_RATE);
 	
-	//std::cout << "Replayed demo...";
+	std::cout << "Replayed demo...";
 }

@@ -844,6 +844,7 @@ int main(int argc, char **argv) {
 	pose_pub.publish(grasp_commands.at(min_diff_index).approach_pose);
 	pressEnter();
 	moveToJointStateMoveIt(n,grasp_commands.at(min_diff_index).approach_pose);
+	pressEnter();
 	
 	
 	//open fingers
