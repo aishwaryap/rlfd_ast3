@@ -7,7 +7,6 @@
 #include <fstream>
 #include <sys/time.h>
 #include <cmath>
-#include <random>
 
 #include <sensor_msgs/JointState.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -21,12 +20,13 @@
 
 #define NUM_JOINTS 8 //6+2 for the arm
 
-#define VEL_THRESH 0.1
+#define VEL_THRESH 0.3
 #define POSE_DIFF_THRESH 0.001
 #define abs(x) x>0?x:-x
 #define NEAR_ZERO_VEL 0.0001
-#define ROS_RATE 50
+#define ROS_RATE 40
 #define NEAR_ZERO 0.000001
+#define PI 3.14159
 
 geometry_msgs::PoseStamped current_pose;
 geometry_msgs::PoseStamped prev_pose;
@@ -68,8 +68,17 @@ std::vector<double> g;
 
 visualization_msgs::MarkerArray marker_array;
 
-std::default_random_engine generator;
-std::normal_distribution<double> distribution(0,1.0);
+//std::default_random_engine generator;
+//std::normal_distribution<double> distribution(0,1.0);
+
+
+std::vector<double> get_zero_vector(int size) {
+	std::vector<double> zero(size);
+	for (int i=0; i<size; i++) {
+		zero[i] = 0;
+	}
+	return zero;
+}
 
 double magnitude_diff(std::vector<double> v1, std::vector<double> v2){
 	double diff = 0;
@@ -134,7 +143,7 @@ void remove_redundant_points() {
 visualization_msgs::Marker create_marker(std::vector<double> pose) {
 	static int id = 0;
 	visualization_msgs::Marker marker;
-	marker.header.frame_id = "level_mux/map";
+	marker.header.frame_id = "mico_link_base";
 	marker.header.stamp = ros::Time::now();
 	marker.ns = "points";
 	marker.action = visualization_msgs::Marker::ADD;
@@ -276,36 +285,6 @@ void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
     std::cout << "Heard pose\n";
 }
 
-double get_rl_reward() {
-	return -translation_diff(g, get_pose_vector(replay_end_pose));
-}
-
-void perturb_parameters() {
-	f_backup = f;
-	for (int i=0; i<f.size(); i++) {
-		double noise = distribution(generator);
-		f[i] += noise;
-	}
-}
-
-void improve_via_rl() {
-	std::cout << "Ener no of trials : ";
-	int N;
-	std::cin >> N;
-	double prev_reward = get_rl_reward();
-	for (int i=0; i<N; i++) {
-		perturb_parameters();
-		calculate_trajectory();
-		std::cout << "Move robot to start position and press enter to start playing. \n";
-		std::cin.get();
-		replay_calculated_trajectory();
-		double reward = get_rl_reward();
-		if (reward < prev_reward) {
-			f = f_backup;
-		}
-	}
-}
-
 // Keyboard interrupt cb 
 void keyboard_interrupt_cb(const std_msgs::String::ConstPtr& msg) {
   ROS_INFO("Going to stop recording demo...\n");
@@ -380,14 +359,6 @@ std::vector<double> normalize_quaternion(std::vector<double> quaternion) {
         normalized_quaternion[i] = 0;
     }
     return normalized_quaternion;
-}
-
-std::vector<double> get_zero_vector(int size) {
-	std::vector<double> zero(size);
-	for (int i=0; i<size; i++) {
-		zero[i] = 0;
-	}
-	return zero;
 }
 
 void replay_calculated_trajectory(int rateHertz) {
@@ -523,6 +494,65 @@ void calculate_trajectory() {
     }
 }
 
+double get_rl_reward() {
+	return -translation_diff(g, get_pose_vector(replay_end_pose));
+}
+
+double get_std_normal_sample() {
+	static bool odd_call = true;
+	static double z0 = 0, z1 = 0;
+	if (odd_call) {
+		odd_call = false;
+		double u1 = abs(((double)rand()) / RAND_MAX);
+		double u2 = abs(((double)rand()) / RAND_MAX);
+		z0 = sqrt(-2 * log(u1)) * cos(2 * PI * u2);
+		z1 = sqrt(-2 * log(u1)) * sin(2 * PI * u2);
+		return z0;
+	} else {
+		odd_call = true;
+		return z1;	
+	}
+}
+
+void perturb_parameters() {
+	f_backup = f;
+	for (int i=0; i<f.size(); i++) {
+		for (int j=0; j<7; j++) {
+			double noise = get_std_normal_sample() * 0.1;
+			f[i][j] += noise;
+		}
+	}
+}
+
+void improve_via_rl() {
+	std::cout << "\n\nEnter no of trials : ";
+	int N;
+	std::cin >> N;
+	double prev_reward = get_rl_reward();
+	double reward;
+	for (int i=0; i<N; i++) {
+		perturb_parameters();
+		calculate_trajectory();
+		std::cout << "traj_x.size() = " << traj_x.size() << "\n";
+		std::cout << "Distance to goal from final point = " << translation_diff(traj_x[traj_x.size()-1], g) << "\n";
+		std::cout << "Do you want to play this trajectory? (y/n) : ";
+		char want_to_play;
+		std::cin >> want_to_play;
+		if (want_to_play == 'y' || want_to_play == 'Y') {
+			std::cout << "Move robot to start position and press enter to start playing. \n";
+			std::cin.get();
+			replay_calculated_trajectory(ROS_RATE);
+			reward = get_rl_reward();	
+		} else {
+			reward = 100;
+		}
+		if (reward < prev_reward) {
+			f = f_backup;
+		}
+		prev_reward = reward;
+	}
+}
+
 void convert_time_to_sec() {
 	for (int i=0; i<t.size();i++) {
 		t[i] /= 1000;
@@ -581,6 +611,8 @@ int main(int argc, char **argv) {
 	//std::cout << "tau =" << tau << "\n"; 
 
 	char satisfied = 'n';
+	tau *= 2;
+	//g[1] += 0.2;
 	
 	while (satisfied != 'y' && satisfied != 'Y') {
 		std::cout << "Enter K: ";
@@ -619,4 +651,6 @@ int main(int argc, char **argv) {
 	replay_calculated_trajectory(ROS_RATE);
 	
 	std::cout << "Replayed demo...";
+	
+	improve_via_rl();
 }
