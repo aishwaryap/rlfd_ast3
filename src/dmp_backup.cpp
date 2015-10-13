@@ -132,9 +132,8 @@ void remove_redundant_points() {
             j++;
         }
     }
-    double subtract_val = new_t[0];
     for (int i=0; i<new_t.size(); i++) {
-        new_t[i] -= subtract_val;
+        new_t[i] -= new_t[0];
     }
     x = new_x;
     t = new_t;
@@ -228,54 +227,27 @@ void learn_dmp() {
         n_dot[i] = std::vector<double>(7);
         f[i] = std::vector<double>(7);
 
-        //std::cout << "f[" << i << "] = ";
-        //std::cout << "((tau * n_dot[" << i << "]) + (D * n[" << i << "])) / K  = ";
-        //std::cout << "a[" << i << "] = ";
-
         for (int j=0; j<7; j++) {
 			//std::cout << "\tj = " << j << "\n";
             if (i == 0) {
                 v[i][j] = 0;
                 a[i][j] = (x[i+1][j] - x[i][j] - v[i][j] * (t[i+1] - t[i])) 
-                            * 2.0 / (t[i+1]*t[i+1] - t[i]*t[i]);
+                            * 2.0 / ((t[i+1] - t[i]) * (t[i+1] - t[i]));
             } else if (i == t.size() - 1) {
                 a[i][j] = 0;
                 v[i][j] = v[i-1][j] + a[i-1][j] * (t[i] - t[i-1]);
             } else {
                 v[i][j] = v[i-i][j] + a[i-1][j] * (t[i] - t[i-1]);
                 a[i][j] = (x[i+1][j] - x[i][j] - v[i][j] * (t[i+1] - t[i])) 
-                            * 2.0 / (t[i+1]*t[i+1] - t[i]*t[i]);
+                            * 2.0 / ((t[i+1] - t[i]) * (t[i+1] - t[i]));
             }    
             n[i][j] = tau * v[i][j];
             n_dot[i][j] = tau * a[i][j];
             f[i][j] = ((tau * n_dot[i][j]) + (D * n[i][j])) / K
                         + (g[j] - x_0[j]) * s[i]
                         - (g[j] - x[i][j]);
-            //std::cout << f[i][j] << " ";
-            //std::cout << ((tau * n_dot[i][j]) + (D * n[i][j])) / K << " ";
-            //std::cout << a[i][j] << " ";
         }
         //std::cout << "\n";
-        //if (i < f.size() - 1) {
-            //std::cout << "v[" << i << "] = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << v[i][j] << " ";
-            //}
-            //std::cout << "\nd[" << i << "] = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << x[i+1][j] - x[i][j] << " ";
-            //}
-            //std::cout << "\nv[" << i << "] * dt = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << v[i][j] * (t[i+1] - t[i]) << " ";
-            //}
-            //std::cout << "\ndt^2 = " << (t[i+1] - t[i]) * (t[i+1] - t[i]);
-            //std::cout << "\na[" << i << "] = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << a[i][j] << " ";
-            //}
-            //std::cout << "\n\n";   
-        //}
     }
     std::cout << "Learnt DMP...\n";
 }
@@ -485,8 +457,7 @@ void calculate_trajectory() {
             cur_a[i] = cur_n_dot[i] / tau;
             next_v[i] = cur_v[i] + cur_a[i] * delta_t;
             next_n[i] = tau * next_v[i];
-            //next_x[i] = cur_x[i] + cur_v[i] * delta_t + 0.5 * cur_a[i] * delta_t * delta_t;
-            next_x[i] = cur_x[i] + ((next_v[i]*next_v[i] - cur_v[i]*cur_v[i]) / 2*cur_a[i]);
+            next_x[i] = cur_x[i] + cur_v[i] * delta_t + 0.5 * cur_a[i] * delta_t * delta_t;
         }
        
         next_v = normalize_quaternion(next_v);
@@ -582,6 +553,12 @@ void improve_via_rl() {
 	}
 }
 
+void convert_time_to_sec() {
+	for (int i=0; i<t.size();i++) {
+		t[i] /= 1000;
+	}
+}
+
 int main(int argc, char **argv) {
 	// Intialize ROS with this node name
 	ros::init(argc, argv, "subscriber");
@@ -612,6 +589,8 @@ int main(int argc, char **argv) {
 		ros::spinOnce();
 	}
 	recording = false;
+
+	//convert_time_to_sec();
 
 	std::cout << "Stopped recording demo.\n";
 	std::cout << "Recorded " << x.size() << " frames\n";

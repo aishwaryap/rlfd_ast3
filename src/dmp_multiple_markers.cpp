@@ -66,11 +66,9 @@ double D = 2.0 * sqrt(K);
 std::vector<double> x_0;
 std::vector<double> g;
 
-visualization_msgs::MarkerArray marker_array;
-
-//std::default_random_engine generator;
-//std::normal_distribution<double> distribution(0,1.0);
-
+visualization_msgs::MarkerArray replay_marker_array;
+visualization_msgs::MarkerArray demo_marker_array;
+visualization_msgs::MarkerArray rl_marker_array;
 
 std::vector<double> get_zero_vector(int size) {
 	std::vector<double> zero(size);
@@ -305,9 +303,13 @@ void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
     gettimeofday(&current_pose_timestamp, NULL);   
     prev_pose = current_pose;
     current_pose = msg;
-    if (recording) {
+    if (!stopRecordingDemo) {
         push_current_time();
         push_current_pose();
+        
+        visualization_msgs::Marker marker = create_marker(get_pose_vector(current_pose));
+        marker.color.b = 1.0
+		demo_marker_array.markers.push_back(marker);
     }
     heardPose = true;
     std::cout << "Heard pose\n";
@@ -425,6 +427,11 @@ void replay_calculated_trajectory(int rateHertz) {
 }
 
 void calculate_trajectory() {
+    visualization_msgs::MarkerArray empty_array;
+    rl_marker_array = empty_array
+    
+    static bool first_execution = true;
+    
 	std::vector< std::vector<double> > empty_vector1;
 	traj_x = empty_vector1;
 	std::vector< std::vector<double> > empty_vector2;
@@ -507,7 +514,12 @@ void calculate_trajectory() {
 
 		// Adding a point to the rviz marker
 		visualization_msgs::Marker marker = create_marker(cur_x);
-		marker_array.markers.push_back(marker);
+        if (first_execution) {
+            replay_marker_array.markers.push_back(marker);
+        } else {
+            marker.color.r = 0.5;
+            rl_marker_array.markers.push_back(marker);    
+        }
         
         traj_x.push_back(cur_x);
         traj_v.push_back(cur_v);
@@ -521,6 +533,8 @@ void calculate_trajectory() {
         cur_n = next_n;
         cur_t += delta_t;
     }
+    
+    first_execution = false;
 }
 
 double get_rl_reward() {
@@ -655,13 +669,15 @@ int main(int argc, char **argv) {
 	float r_amount = 0.0;
 	float per_point_color_diff = 1.0 / num_points;
 	for (int point_num = 0; point_num <= num_points; point_num++) {
-		marker_array.markers[point_num].color.g = g_amount;
-		marker_array.markers[point_num].color.r = r_amount;
+		replay_marker_array.markers[point_num].color.g = g_amount;
+		replay_marker_array.markers[point_num].color.r = r_amount;
 		g_amount -= per_point_color_diff;
 		r_amount += per_point_color_diff;
 	}
 	// Display points in rviz
-	marker_pub.publish(marker_array);
+    marker_pub.publish(demo_marker_array);
+	marker_pub.publish(replay_marker_array);
+    ros::spinOnce();
     
     // Reset tau for desired duration of demo
     
@@ -674,4 +690,7 @@ int main(int argc, char **argv) {
 	std::cout << "Replayed demo...";
 	
 	improve_via_rl();
+    
+    marker_pub.publish(rl_marker_array);
+    ros::spinOnce();
 }
