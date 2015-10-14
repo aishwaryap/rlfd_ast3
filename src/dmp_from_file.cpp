@@ -158,7 +158,7 @@ void learn_dmp() {
     for (int i=0; i<t.size(); i++) {
     	//std::cout << "i = " << i << ":\n";
         s[i] = calc_s(t[i]);
-        //std::cout << "s[" << i << "] = " << s[i] << "\n";
+        std::cout << "s[" << i << "] = " << s[i] << "\n";
 
         v[i] = std::vector<double>(7);
         a[i] = std::vector<double>(7);
@@ -640,7 +640,7 @@ int main(int argc, char **argv) {
 	std::cout << "Move robot to start position and press enter to replay demo : ";
 	std::cin.get();
 	
-	replay_calculated_trajectory(ROS_RATE);
+	//replay_calculated_trajectory(ROS_RATE);
 	
 	std::cout << "Replayed demo...";
 }

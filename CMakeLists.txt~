@@ -170,6 +170,10 @@ add_dependencies(dmp jaco_msgs_gencpp agile_grasp_gencpp)
 add_executable(keyboard_interrupt src/keyboard_interrupt.cpp)
 target_link_libraries(keyboard_interrupt ${catkin_LIBRARIES} )
 
+add_executable(dmp_from_file src/dmp_from_file.cpp)
+target_link_libraries(dmp_from_file ${catkin_LIBRARIES} )
+add_dependencies(dmp_from_file jaco_msgs_gencpp agile_grasp_gencpp)
+
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
