@@ -21,7 +21,7 @@
 #define NUM_JOINTS 8 //6+2 for the arm
 
 #define VEL_THRESH 0.3
-#define POSE_DIFF_THRESH 0.001
+#define POSE_DIFF_THRESH 0.01
 #define abs(x) x>0?x:-x
 #define NEAR_ZERO_VEL 0.0001
 #define ROS_RATE 40
@@ -228,7 +228,7 @@ void learn_dmp() {
         n_dot[i] = std::vector<double>(7);
         f[i] = std::vector<double>(7);
 
-        //std::cout << "f[" << i << "] = ";
+        std::cout << "f[" << i << "] = ";
         //std::cout << "((tau * n_dot[" << i << "]) + (D * n[" << i << "])) / K  = ";
         //std::cout << "a[" << i << "] = ";
 
@@ -251,11 +251,11 @@ void learn_dmp() {
             f[i][j] = ((tau * n_dot[i][j]) + (D * n[i][j])) / K
                         + (g[j] - x_0[j]) * s[i]
                         - (g[j] - x[i][j]);
-            //std::cout << f[i][j] << " ";
+            std::cout << f[i][j] << " ";
             //std::cout << ((tau * n_dot[i][j]) + (D * n[i][j])) / K << " ";
             //std::cout << a[i][j] << " ";
         }
-        //std::cout << "\n";
+        std::cout << "\n";
         //if (i < f.size() - 1) {
             //std::cout << "v[" << i << "] = ";
             //for (int j=0; j<7; j++) {
@@ -370,9 +370,13 @@ geometry_msgs::TwistStamped get_velocity_msg(std::vector<double> velocities) {
 }
 
 std::vector<double> make_velocities_safe(std::vector<double> velocities) {
+	bool printed_once = false;
     while (translation_diff(velocities, get_zero_vector(7)) > VEL_THRESH) {
-        std::cout << "Dangerous!!!";
-        for (int i=0; i<7; i++) {
+		if (!printed_once) {
+			std::cout << "Dangerous!!!";
+			printed_once= true;
+		}
+		for (int i=0; i<7; i++) {
 			velocities[i] /= 2;
 		}
     }
@@ -393,6 +397,9 @@ void replay_calculated_trajectory(int rateHertz) {
 	ros::Rate r(rateHertz);
 	
 	//int freq_to_use = (1000/rateHertz) / TRAJ_TIME_STEP;
+	
+	std::cout << "traj_v.size() = " << traj_v.size() << ". Ok? \n";
+	std::cin.get();
 	
 	for (int i=0; i<traj_v.size(); i++) {
 		std::cout << "Going to publish velocities: ";
@@ -416,7 +423,12 @@ void replay_calculated_trajectory(int rateHertz) {
 		}
 	}
 	
+	std::cout << "Finished true replay. Now making it stop...\n\n";
+	
 	geometry_msgs::TwistStamped zero_velocity_msg = get_velocity_msg(get_zero_vector(7));
+	pub_velocity.publish(zero_velocity_msg);
+	r.sleep();
+	ros::spinOnce();
 	pub_velocity.publish(zero_velocity_msg);
 	r.sleep();
 	ros::spinOnce();
@@ -450,8 +462,12 @@ void calculate_trajectory() {
 	int cc =0;
 	while (translation_diff(cur_x, g) > POSE_DIFF_THRESH) {
 		//std::cout << "Distance to go: " << translation_diff(cur_x, g) << "\n";
+		if (translation_diff(cur_x, g) > INT_MAX) {
+			std::cout << "Could not plan trajectory...\n";
+			break;
+		}
 		cc++;
-		if (cc == 5000){
+		if (cc == 10000){
 			break;
 		}
 		
@@ -486,7 +502,9 @@ void calculate_trajectory() {
             next_v[i] = cur_v[i] + cur_a[i] * delta_t;
             next_n[i] = tau * next_v[i];
             //next_x[i] = cur_x[i] + cur_v[i] * delta_t + 0.5 * cur_a[i] * delta_t * delta_t;
-            next_x[i] = cur_x[i] + ((next_v[i]*next_v[i] - cur_v[i]*cur_v[i]) / 2*cur_a[i]);
+            double next_t = cur_t + delta_t;
+            next_x[i] = cur_x[i] + cur_v[i] * delta_t + 0.5 * cur_a[i] * (next_t * next_t - cur_t*cur_t);
+            //next_x[i] = cur_x[i] + ((next_v[i]*next_v[i] - cur_v[i]*cur_v[i]) / 2*cur_a[i]);
         }
        
         next_v = normalize_quaternion(next_v);
@@ -547,7 +565,7 @@ void perturb_parameters() {
 	f_backup = f;
 	for (int i=0; i<f.size(); i++) {
 		for (int j=0; j<7; j++) {
-			double noise = get_std_normal_sample() * 0.1;
+			double noise = get_std_normal_sample() * 0.001;
 			f[i][j] += noise;
 		}
 	}
@@ -632,7 +650,7 @@ int main(int argc, char **argv) {
 	//std::cout << "tau =" << tau << "\n"; 
 
 	char satisfied = 'n';
-	tau *= 2;
+	//tau *= 2;
 	//g[1] += 0.2;
 	
 	while (satisfied != 'y' && satisfied != 'Y') {
@@ -668,7 +686,8 @@ int main(int argc, char **argv) {
 	std::cout << "Move robot to start position and press enter to replay demo : ";
 	std::cin.get();
 	
-	//replay_demo(listenRateHertz);
+	std::cout << "traj_v.size() = " << traj_v.size() << ". Ok? \n";
+	std::cin.get();
 	replay_calculated_trajectory(ROS_RATE);
 	
 	std::cout << "Replayed demo...";

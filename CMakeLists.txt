@@ -174,6 +174,10 @@ add_executable(dmp_from_file src/dmp_from_file.cpp)
 target_link_libraries(dmp_from_file ${catkin_LIBRARIES} )
 add_dependencies(dmp_from_file jaco_msgs_gencpp agile_grasp_gencpp)
 
+add_executable(dmp_multiple_markers src/dmp_multiple_markers.cpp)
+target_link_libraries(dmp_multiple_markers ${catkin_LIBRARIES} )
+add_dependencies(dmp_multiple_markers jaco_msgs_gencpp agile_grasp_gencpp)
+
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above

@@ -21,7 +21,7 @@
 #define NUM_JOINTS 8 //6+2 for the arm
 
 #define VEL_THRESH 0.3
-#define POSE_DIFF_THRESH 0.001
+#define POSE_DIFF_THRESH 0.05
 #define abs(x) x>0?x:-x
 #define NEAR_ZERO_VEL 0.0001
 #define ROS_RATE 40
@@ -35,6 +35,7 @@ geometry_msgs::PoseStamped replay_end_pose;
 bool heardPose = false;
 bool stopRecordingDemo = false;
 bool recording = false;
+bool rl_improvement = false;
 
 ros::Publisher pub_velocity;
 
@@ -62,6 +63,8 @@ double alpha = 2.0 * log(10);
 double tau = 0;
 double K = 100;
 double D = 2.0 * sqrt(K);
+
+double reward = 0;
 
 std::vector<double> x_0;
 std::vector<double> g;
@@ -308,7 +311,7 @@ void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
         push_current_pose();
         
         visualization_msgs::Marker marker = create_marker(get_pose_vector(current_pose));
-        marker.color.b = 1.0
+        marker.color.b = 1.0;
 		demo_marker_array.markers.push_back(marker);
     }
     heardPose = true;
@@ -372,9 +375,13 @@ geometry_msgs::TwistStamped get_velocity_msg(std::vector<double> velocities) {
 }
 
 std::vector<double> make_velocities_safe(std::vector<double> velocities) {
+	bool printed_once = false;
     while (translation_diff(velocities, get_zero_vector(7)) > VEL_THRESH) {
-        std::cout << "Dangerous!!!";
-        for (int i=0; i<7; i++) {
+		if (!printed_once) {
+			std::cout << "Dangerous!!!";
+			printed_once= true;
+		}
+		for (int i=0; i<7; i++) {
 			velocities[i] /= 2;
 		}
     }
@@ -397,6 +404,10 @@ void replay_calculated_trajectory(int rateHertz) {
 	//int freq_to_use = (1000/rateHertz) / TRAJ_TIME_STEP;
 	
 	for (int i=0; i<traj_v.size(); i++) {
+		if (translation_diff(g, get_pose_vector(current_pose)) < POSE_DIFF_THRESH){
+			break;
+		}
+		
 		std::cout << "Going to publish velocities: ";
 		for (int j=0; j<7; j++) {
 			std::cout << traj_v[i][j] << " ";
@@ -407,7 +418,7 @@ void replay_calculated_trajectory(int rateHertz) {
 			std::cout << "Converting to message...\n";
 			geometry_msgs::TwistStamped velocity_msg = get_velocity_msg(traj_v[i]);
 			std::cout << "Going to publish...\n";
-			pub_velocity.publish(velocity_msg);
+			//pub_velocity.publish(velocity_msg);
 			std::cout << "Published " << velocity_msg << "\n";
 			r.sleep();
 			std::cout << "Came out of sleep\n";
@@ -419,7 +430,7 @@ void replay_calculated_trajectory(int rateHertz) {
 	}
 	
 	geometry_msgs::TwistStamped zero_velocity_msg = get_velocity_msg(get_zero_vector(7));
-	pub_velocity.publish(zero_velocity_msg);
+	//pub_velocity.publish(zero_velocity_msg);
 	r.sleep();
 	ros::spinOnce();
 	
@@ -428,9 +439,9 @@ void replay_calculated_trajectory(int rateHertz) {
 
 void calculate_trajectory() {
     visualization_msgs::MarkerArray empty_array;
-    rl_marker_array = empty_array
-    
-    static bool first_execution = true;
+    rl_marker_array = empty_array;
+    visualization_msgs::MarkerArray empty_array2;
+    replay_marker_array = empty_array2;
     
 	std::vector< std::vector<double> > empty_vector1;
 	traj_x = empty_vector1;
@@ -456,7 +467,12 @@ void calculate_trajectory() {
     
 	int cc =0;
 	while (translation_diff(cur_x, g) > POSE_DIFF_THRESH) {
-		//std::cout << "Distance to go: " << translation_diff(cur_x, g) << "\n";
+		if (translation_diff(cur_x, g) > INT_MAX) {
+			reward = -translation_diff(cur_x, g);
+			std::cout << "Could not plan trajectory...\n";
+			break;
+		}
+		std::cout << "Distance to go: " << translation_diff(cur_x, g) << "\n";
 		cc++;
 		if (cc == 5000){
 			break;
@@ -514,7 +530,7 @@ void calculate_trajectory() {
 
 		// Adding a point to the rviz marker
 		visualization_msgs::Marker marker = create_marker(cur_x);
-        if (first_execution) {
+        if (!rl_improvement) {
             replay_marker_array.markers.push_back(marker);
         } else {
             marker.color.r = 0.5;
@@ -533,12 +549,12 @@ void calculate_trajectory() {
         cur_n = next_n;
         cur_t += delta_t;
     }
-    
-    first_execution = false;
+    reward = -translation_diff(cur_x, g);
 }
 
 double get_rl_reward() {
-	return -translation_diff(g, get_pose_vector(replay_end_pose));
+	return reward;
+	//return -translation_diff(g, get_pose_vector(replay_end_pose));
 }
 
 double get_std_normal_sample() {
@@ -561,7 +577,7 @@ void perturb_parameters() {
 	f_backup = f;
 	for (int i=0; i<f.size(); i++) {
 		for (int j=0; j<7; j++) {
-			double noise = get_std_normal_sample() * 0.1;
+			double noise = get_std_normal_sample() * 0.001;
 			f[i][j] += noise;
 		}
 	}
@@ -645,9 +661,12 @@ int main(int argc, char **argv) {
 	tau = t[t.size() - 1];
 	//std::cout << "tau =" << tau << "\n"; 
 
+	marker_pub.publish(demo_marker_array);
+	ros::spinOnce();
+
 	char satisfied = 'n';
-	tau *= 2;
-	//g[1] += 0.2;
+	//tau *= 2;
+	g[1] += 0.2;
 	
 	while (satisfied != 'y' && satisfied != 'Y') {
 		std::cout << "Enter K: ";
@@ -675,11 +694,8 @@ int main(int argc, char **argv) {
 		r_amount += per_point_color_diff;
 	}
 	// Display points in rviz
-    marker_pub.publish(demo_marker_array);
-	marker_pub.publish(replay_marker_array);
+    marker_pub.publish(replay_marker_array);
     ros::spinOnce();
-    
-    // Reset tau for desired duration of demo
     
 	std::cout << "Move robot to start position and press enter to replay demo : ";
 	std::cin.get();
@@ -689,8 +705,11 @@ int main(int argc, char **argv) {
 	
 	std::cout << "Replayed demo...";
 	
+	rl_improvement = true;
+	
 	improve_via_rl();
     
+    std::cout << "rl_marker_array.markers.size() = " << rl_marker_array.markers.size() << "\n";
     marker_pub.publish(rl_marker_array);
     ros::spinOnce();
 }
