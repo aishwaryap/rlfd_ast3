@@ -11,10 +11,15 @@ int main(int argc, char **argv) {
 	ros::Rate loop_rate(10);
 
 	int count = 0;
+    
+    // Wait for key press
 	std::cout << "Press any key to stop recording the demo \n";
 	std::cin.get();
 
 	while (ros::ok() && count <= 5) {
+        // Publish a message a few times on the topic in case one of them
+        // is lost
+        
 		std_msgs::String msg;
 		std::stringstream ss;
 		ss << "Stop";

@@ -35,10 +35,11 @@ geometry_msgs::PoseStamped replay_end_pose;
 bool heardPose = false;
 bool stopRecordingDemo = false;
 bool recording = false;
+bool rl_improvement = false;
 
 ros::Publisher pub_velocity;
 
-// Vectors to be used by the DMP
+// Vectors to be used while learning
 std::vector< double > t;
 std::vector< double > s;
 std::vector< std::vector<double> > x;
@@ -49,29 +50,33 @@ std::vector< std::vector<double> > n;
 std::vector< std::vector<double> > n_dot;
 std::vector< std::vector<double> > f_backup;
 
+// Vectors to be used while planning - It is not actually needed to store
+// anything except traj_v but helps debug
 std::vector< std::vector<double> > traj_x;
 std::vector< std::vector<double> > traj_v;
 std::vector< std::vector<double> > traj_n;
 std::vector< std::vector<double> > traj_a;
 std::vector< std::vector<double> > traj_f;
 
-
 timeval start_of_demo, current_pose_timestamp, prev_pose_timestamp;
 
 double alpha = 2.0 * log(10);
 double tau = 0;
+double demo_tau = 0;
 double K = 100;
 double D = 2.0 * sqrt(K);
 
 std::vector<double> x_0;
 std::vector<double> g;
 
-visualization_msgs::MarkerArray marker_array;
+std::vector<double> demo_x_0;
+std::vector<double> demo_g;
 
-//std::default_random_engine generator;
-//std::normal_distribution<double> distribution(0,1.0);
+visualization_msgs::MarkerArray replay_marker_array;
+visualization_msgs::MarkerArray demo_marker_array;
+visualization_msgs::MarkerArray rl_marker_array;
 
-
+// Return a zero vector of the required size
 std::vector<double> get_zero_vector(int size) {
 	std::vector<double> zero(size);
 	for (int i=0; i<size; i++) {
@@ -80,6 +85,7 @@ std::vector<double> get_zero_vector(int size) {
 	return zero;
 }
 
+// Find the L2 difference between the vectors
 double magnitude_diff(std::vector<double> v1, std::vector<double> v2){
 	double diff = 0;
 	for (int i=0; i<7; i++) {
@@ -88,6 +94,7 @@ double magnitude_diff(std::vector<double> v1, std::vector<double> v2){
 	return sqrt(diff);
 }
 
+// Find the L2 difference between the translation coordinates of the vectors
 double translation_diff(std::vector<double> v1, std::vector<double> v2){
 	double diff = 0;
 	for (int i=0; i<3; i++) {
@@ -96,20 +103,27 @@ double translation_diff(std::vector<double> v1, std::vector<double> v2){
 	return sqrt(diff);
 }
 
+// Remove stationary points at the start and end of demo
 void remove_redundant_points() {
     std::vector<int> indices_to_remove;
+    // Find points identical to the start
     for (int i=0; i<t.size(); i++) {
         if (magnitude_diff(x[i], x[0]) < NEAR_ZERO) {
             indices_to_remove.push_back(i);
         }    
     }
     std::vector<int> end_indices_to_remove;
+    
+    // Remove the last point because it usually has errors
     end_indices_to_remove.push_back(t.size()-1);
+    // Find points identical to the second to last position
     for (int i=t.size()-2; i>=0; i--) {
         if (magnitude_diff(x[i], x[t.size()-2]) < NEAR_ZERO) {
             end_indices_to_remove.push_back(i);
         }    
     }
+    
+    // Create a sorted vector fo points to be removed
     for (int i=end_indices_to_remove.size()-1; i>=0; i--) {
         indices_to_remove.push_back(end_indices_to_remove[i]);
     }
@@ -120,6 +134,7 @@ void remove_redundant_points() {
     }
     std::cout << "\n";
     
+    // Create new vectors by not including points not required
     std::vector< std::vector<double> > new_x;
     std::vector<double> new_t;
     int j = 0;
@@ -132,6 +147,8 @@ void remove_redundant_points() {
             j++;
         }
     }
+    
+    // Adjust time so that it starts at 0
     double subtract_val = new_t[0];
     for (int i=0; i<new_t.size(); i++) {
         new_t[i] -= subtract_val;
@@ -166,6 +183,7 @@ visualization_msgs::Marker create_marker(std::vector<double> pose) {
 	return marker;
 }
 
+// Convert geometry_msgs::PoseStamped to std::vector
 std::vector<double> get_pose_vector(geometry_msgs::PoseStamped pose) {
     std::vector<double> cur_x(7);
     cur_x[0] = pose.pose.position.x;
@@ -178,19 +196,23 @@ std::vector<double> get_pose_vector(geometry_msgs::PoseStamped pose) {
     return cur_x;
 }
 
+// Calculate s
 double calc_s(double t) {
     return exp(- alpha * t / tau);
 }
 
+// Add the current pose to the list of demo waypoints
 void push_current_pose() {
     x.push_back(get_pose_vector(current_pose));
 }
 
+// Set x_0 and g from the demo
 void set_x_0_and_g() {
     x_0 = x[0];
     g = x[x.size() - 1];
 }
 
+// Check if velocity magnitude is too small
 bool near_zero_vel(std::vector<double> velocity) {
 	double magnitude = 0;
 	for (int i=0; i<3; i++) {
@@ -203,6 +225,7 @@ bool near_zero_vel(std::vector<double> velocity) {
 	return false;
 }
 
+// Learn DMP parameters
 void learn_dmp() {
     v = std::vector< std::vector<double> >(t.size());
     a = std::vector< std::vector<double> >(t.size());
@@ -213,14 +236,8 @@ void learn_dmp() {
     
     std::cout << "Initialized vectors...\n";
     
-    //std::cout << "t.size() = " << t.size() << "\n";
-    //std::cout << "Now going to start loop\n";
-   
-    
     for (int i=0; i<t.size(); i++) {
-    	//std::cout << "i = " << i << ":\n";
         s[i] = calc_s(t[i]);
-        //std::cout << "s[" << i << "] = " << s[i] << "\n";
 
         v[i] = std::vector<double>(7);
         a[i] = std::vector<double>(7);
@@ -228,12 +245,8 @@ void learn_dmp() {
         n_dot[i] = std::vector<double>(7);
         f[i] = std::vector<double>(7);
 
-        std::cout << "f[" << i << "] = ";
-        //std::cout << "((tau * n_dot[" << i << "]) + (D * n[" << i << "])) / K  = ";
-        //std::cout << "a[" << i << "] = ";
-
         for (int j=0; j<7; j++) {
-			//std::cout << "\tj = " << j << "\n";
+            // Calculate velocity and acceleration using Newton's laws
             if (i == 0) {
                 v[i][j] = 0;
                 a[i][j] = (x[i+1][j] - x[i][j] - v[i][j] * (t[i+1] - t[i])) 
@@ -246,93 +259,72 @@ void learn_dmp() {
                 a[i][j] = (x[i+1][j] - x[i][j] - v[i][j] * (t[i+1] - t[i])) 
                             * 2.0 / (t[i+1]*t[i+1] - t[i]*t[i]);
             }    
+            
+            // Calculate DMP variables from appropriate equations
             n[i][j] = tau * v[i][j];
             n_dot[i][j] = tau * a[i][j];
             f[i][j] = ((tau * n_dot[i][j]) + (D * n[i][j])) / K
                         + (g[j] - x_0[j]) * s[i]
                         - (g[j] - x[i][j]);
-            std::cout << f[i][j] << " ";
-            //std::cout << ((tau * n_dot[i][j]) + (D * n[i][j])) / K << " ";
-            //std::cout << a[i][j] << " ";
         }
-        std::cout << "\n";
-        //if (i < f.size() - 1) {
-            //std::cout << "v[" << i << "] = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << v[i][j] << " ";
-            //}
-            //std::cout << "\nd[" << i << "] = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << x[i+1][j] - x[i][j] << " ";
-            //}
-            //std::cout << "\nv[" << i << "] * dt = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << v[i][j] * (t[i+1] - t[i]) << " ";
-            //}
-            //std::cout << "\ndt^2 = " << (t[i+1] - t[i]) * (t[i+1] - t[i]);
-            //std::cout << "\na[" << i << "] = ";
-            //for (int j=0; j<7; j++) {
-                //std::cout << a[i][j] << " ";
-            //}
-            //std::cout << "\n\n";   
-        //}
     }
     std::cout << "Learnt DMP...\n";
 }
 
+// Obtain time difference between two timestamps in seconds
 double get_time_diff(timeval tv) {
     return ((tv.tv_sec - start_of_demo.tv_sec) + 
             (tv.tv_usec - start_of_demo.tv_usec)/1000000.0 );
 }
 
+// Get time from the start to when the most recent pose was obtained
 double get_last_pose_time() {
     return get_time_diff(current_pose_timestamp);
 }
 
+// Get time diff from start of demo to current system time
 double get_cur_time() {
     timeval cur_time;
     gettimeofday(&cur_time, NULL);   
     return get_time_diff(cur_time);
 }
 
+// Push the time at which the last pose was recorded to the stored demo values
 void push_current_time() {
     t.push_back(get_last_pose_time());
 }
 
-//Joint state cb
+// Callback function to be executed on hearing a pose
 void toolpos_cb (const geometry_msgs::PoseStamped &msg) {
+    // Obtain timestamp at which pose was received
     prev_pose_timestamp = current_pose_timestamp;
-    gettimeofday(&current_pose_timestamp, NULL);   
+    gettimeofday(&current_pose_timestamp, NULL);  
+    
+    // Store the pose 
     prev_pose = current_pose;
     current_pose = msg;
-    if (recording) {
+    
+    if (!stopRecordingDemo) {
+        // If demo is going on, store demo points
         push_current_time();
         push_current_pose();
+        
+        // Create a marker for the current demo point
+        visualization_msgs::Marker marker = create_marker(get_pose_vector(current_pose));
+        marker.color.b = 1.0
+		demo_marker_array.markers.push_back(marker);
     }
     heardPose = true;
     std::cout << "Heard pose\n";
 }
 
-// Keyboard interrupt cb 
+// Callback function on hearing keyboard interrupt to stop demo
 void keyboard_interrupt_cb(const std_msgs::String::ConstPtr& msg) {
   ROS_INFO("Going to stop recording demo...\n");
   stopRecordingDemo = true;
 }
 
-bool reached_goal(){
-	std::cout << "In reached goal \n";
-    std::vector<double> cur_pose = get_pose_vector(current_pose);
-    std::cout << "In reached goal before loop...\n";
-    for (int i=0; i<7; i++) {
-        if (abs(cur_pose[i] - g[i]) > POSE_DIFF_THRESH) {
-			std::cout << "Mismatch at index " << i << "\n";
-            return false;        
-		}
-    }
-    std::cout << "Going to return true\n";
-	return true;
-}
-
+// Calculate f by interpolating
 std::vector<double> calc_f(double cur_s) {
     if (cur_s >= s[0]) {
         return f[0];
@@ -358,6 +350,7 @@ std::vector<double> calc_f(double cur_s) {
     exit(1);
 }
 
+// Convert std::vector to geometry_msgs::TwistStamped
 geometry_msgs::TwistStamped get_velocity_msg(std::vector<double> velocities) {
     geometry_msgs::TwistStamped velocityMsg;
     velocityMsg.twist.linear.x = velocities[0];
@@ -369,20 +362,21 @@ geometry_msgs::TwistStamped get_velocity_msg(std::vector<double> velocities) {
     return velocityMsg;
 }
 
+// We don't want to publish very large velocities to the robot. If the velocities 
+// are too large, repeatedly reduce the magnitude by half until they are safe.
+// This method at leats retains the direction of motion.
 std::vector<double> make_velocities_safe(std::vector<double> velocities) {
-	bool printed_once = false;
     while (translation_diff(velocities, get_zero_vector(7)) > VEL_THRESH) {
-		if (!printed_once) {
-			std::cout << "Dangerous!!!";
-			printed_once= true;
-		}
-		for (int i=0; i<7; i++) {
+        std::cout << "Dangerous!!!";
+        for (int i=0; i<7; i++) {
 			velocities[i] /= 2;
 		}
     }
     return velocities;
 }
 
+// This was intended tonormalize quaternions appropriately but now I zero
+// them out as I am not using angular velocities
 std::vector<double> normalize_quaternion(std::vector<double> quaternion) {
 	double magnitude = quaternion[3] + quaternion[4] + quaternion[5] + quaternion[6];
     std::vector<double> normalized_quaternion = std::vector<double>(quaternion);
@@ -393,42 +387,26 @@ std::vector<double> normalize_quaternion(std::vector<double> quaternion) {
     return normalized_quaternion;
 }
 
+// Replay the calculated trajectory
 void replay_calculated_trajectory(int rateHertz) {
 	ros::Rate r(rateHertz);
 	
-	//int freq_to_use = (1000/rateHertz) / TRAJ_TIME_STEP;
-	
-	std::cout << "traj_v.size() = " << traj_v.size() << ". Ok? \n";
-	std::cin.get();
-	
 	for (int i=0; i<traj_v.size(); i++) {
-		std::cout << "Going to publish velocities: ";
-		for (int j=0; j<7; j++) {
-			std::cout << traj_v[i][j] << " ";
-		}
-		std::cout << "\n";
-        
         if (!near_zero_vel(traj_v[i])) {
-			std::cout << "Converting to message...\n";
 			geometry_msgs::TwistStamped velocity_msg = get_velocity_msg(traj_v[i]);
-			std::cout << "Going to publish...\n";
+			std::cout << "Publishing " << velocity_msg << "\n";
 			pub_velocity.publish(velocity_msg);
-			std::cout << "Published " << velocity_msg << "\n";
 			r.sleep();
-			std::cout << "Came out of sleep\n";
 			ros::spinOnce();
-			std::cout << "End of loop\n";
+			std::cout << "Looping...\n";
 		} else {
+            // Publishing of zero velocities sometimes stops the robot
 			std::cout << "Not publishing zero velocity...\n";
 		}
 	}
 	
-	std::cout << "Finished true replay. Now making it stop...\n\n";
-	
+    // Publish a zero velocity at the end to make sure the robot stops
 	geometry_msgs::TwistStamped zero_velocity_msg = get_velocity_msg(get_zero_vector(7));
-	pub_velocity.publish(zero_velocity_msg);
-	r.sleep();
-	ros::spinOnce();
 	pub_velocity.publish(zero_velocity_msg);
 	r.sleep();
 	ros::spinOnce();
@@ -436,8 +414,14 @@ void replay_calculated_trajectory(int rateHertz) {
 	replay_end_pose = current_pose;
 }
 
+// Plan the trajectory using learned parameters
 void calculate_trajectory() {
-	std::vector< std::vector<double> > empty_vector1;
+    visualization_msgs::MarkerArray empty_array;
+    rl_marker_array = empty_array;
+    visualization_msgs::MarkerArray empty_array2;
+    replay_marker_array = empty_array2;
+    
+    std::vector< std::vector<double> > empty_vector1;
 	traj_x = empty_vector1;
 	std::vector< std::vector<double> > empty_vector2;
 	traj_v = empty_vector2;
@@ -453,21 +437,20 @@ void calculate_trajectory() {
 	double cur_t, cur_s;
 	bool first_point = true;
 	
-    //double delta_t = 1000.0 / ROS_RATE;
     double delta_t = 1.0 / ROS_RATE;
-    //double delta_t = 20;
     std::cout << "delta_t = " << delta_t << "\n";
     std::cout << "K = " << K << "\n";
     
 	int cc =0;
 	while (translation_diff(cur_x, g) > POSE_DIFF_THRESH) {
-		//std::cout << "Distance to go: " << translation_diff(cur_x, g) << "\n";
-		if (translation_diff(cur_x, g) > INT_MAX) {
-			std::cout << "Could not plan trajectory...\n";
-			break;
-		}
+        if (translation_diff(cur_x, g) > INT_MAX) {
+            // Give up is distance form goal is too much else the code hangs
+            std::cout << "Giving up. Too far from goal..\n";
+            break
+        }
 		cc++;
-		if (cc == 10000){
+		if (cc == 5000){    
+            // Give up planning if it is taking too many steps
 			break;
 		}
 		
@@ -482,13 +465,6 @@ void calculate_trajectory() {
 	    cur_s = calc_s(cur_t);
         cur_f = calc_f(cur_s);
         
-        //std::cout << "t = " << cur_t << ", s = " << cur_s << ", f = ";
-        //for (int i=0; i<7; i++) {
-            //std::cout << cur_f[i] << " ";
-        //}
-        //std::cout << "\n";
-        //std::cin.get();
-        
         cur_n_dot = get_zero_vector(7);
         cur_a = get_zero_vector(7);
         next_v = get_zero_vector(7);
@@ -496,36 +472,28 @@ void calculate_trajectory() {
         next_x = get_zero_vector(7);
         
         for (int i=0; i<7; i++) {
+            // Calculate acceleration using DMP parameters
             cur_n_dot[i] = (K * (g[i] - cur_x[i]) - D * cur_n[i] - 
                 K * (g[i] - x_0[i]) * cur_s + K * cur_f[i]) / tau;
             cur_a[i] = cur_n_dot[i] / tau;
+
+            // Use newton's laws to find next position and velocity
             next_v[i] = cur_v[i] + cur_a[i] * delta_t;
             next_n[i] = tau * next_v[i];
-            //next_x[i] = cur_x[i] + cur_v[i] * delta_t + 0.5 * cur_a[i] * delta_t * delta_t;
-            double next_t = cur_t + delta_t;
-            next_x[i] = cur_x[i] + cur_v[i] * delta_t + 0.5 * cur_a[i] * (next_t * next_t - cur_t*cur_t);
-            //next_x[i] = cur_x[i] + ((next_v[i]*next_v[i] - cur_v[i]*cur_v[i]) / 2*cur_a[i]);
+            next_x[i] = cur_x[i] + ((next_v[i]*next_v[i] - cur_v[i]*cur_v[i]) / 2*cur_a[i]);
         }
        
         next_v = normalize_quaternion(next_v);
-        //std::cout << "Before safety...\n";
         next_v = make_velocities_safe(next_v);
 
-		//std::cout << "next_v: ";
-		//for (int i=0; i<7; i++) {
-			//std::cout << next_v[i] << " ";
-		//}
-		//std::cout << "\n";
-
-		//std::cout << "cur_x: ";
-		//for (int i=0; i<7; i++) {
-			//std::cout << cur_x[i] << " ";
-		//}
-		//std::cout << "\n";
-
-		// Adding a point to the rviz marker
+		// Adding a point to the rviz markers
 		visualization_msgs::Marker marker = create_marker(cur_x);
-		marker_array.markers.push_back(marker);
+        if (!rl_improvement) {
+            replay_marker_array.markers.push_back(marker);
+        } else {
+            marker.color.r = 0.5;
+            rl_marker_array.markers.push_back(marker);    
+        }
         
         traj_x.push_back(cur_x);
         traj_v.push_back(cur_v);
@@ -541,10 +509,13 @@ void calculate_trajectory() {
     }
 }
 
+// Calculate RL reward
 double get_rl_reward() {
 	return -translation_diff(g, get_pose_vector(replay_end_pose));
 }
 
+// Sample from a standard normal distribution
+// Uses Box-Muller transform to convert uniform samples to Gaussian samples
 double get_std_normal_sample() {
 	static bool odd_call = true;
 	static double z0 = 0, z1 = 0;
@@ -561,16 +532,18 @@ double get_std_normal_sample() {
 	}
 }
 
+// Perturb parameters by scaled down Gaussian noise
 void perturb_parameters() {
 	f_backup = f;
 	for (int i=0; i<f.size(); i++) {
 		for (int j=0; j<7; j++) {
-			double noise = get_std_normal_sample() * 0.001;
+			double noise = get_std_normal_sample() * 0.01;
 			f[i][j] += noise;
 		}
 	}
 }
 
+// Simple RL algorithm
 void improve_via_rl() {
 	std::cout << "\n\nEnter no of trials : ";
 	int N;
@@ -586,12 +559,14 @@ void improve_via_rl() {
 		char want_to_play;
 		std::cin >> want_to_play;
 		if (want_to_play == 'y' || want_to_play == 'Y') {
+            // Play trajectory and get reward if user allowed
 			std::cout << "Move robot to start position and press enter to start playing. \n";
 			std::cin.get();
 			replay_calculated_trajectory(ROS_RATE);
 			reward = get_rl_reward();	
 		} else {
-			reward = 100;
+            // User did not allow execution - large negative reward
+			reward = -100;
 		}
 		if (reward < prev_reward) {
 			f = f_backup;
@@ -600,29 +575,44 @@ void improve_via_rl() {
 	}
 }
 
+// Chaneg tau, x_0 or g for replay
+void set_params_for_replay() {
+    tau *= 2;
+    g[1] += 0.2;
+}
+
+void reset_params_for_demo() {
+    tau = demo_tau;
+    x_0 = demo_x_0;
+    g = demo_g;
+}
+
 int main(int argc, char **argv) {
 	// Intialize ROS with this node name
 	ros::init(argc, argv, "subscriber");
 	
 	ros::NodeHandle n;
 	
-	//create subscriber to tool position topic - Cartesian end-effector position
+	// Subscriber to tool position topic - Cartesian end-effector position
 	ros::Subscriber sub_tool = n.subscribe("/mico_arm_driver/out/tool_position", 1, toolpos_cb);
 	
 	// Subscribe to the code that will publish a keyboard interrupt when the demo is over
 	ros::Subscriber sub = n.subscribe("keyboard_interrupt", 1000, keyboard_interrupt_cb);
 
-	//publish velocities
+	// Publisher for velocities
 	pub_velocity = n.advertise<geometry_msgs::TwistStamped>("/mico_arm_driver/in/cartesian_velocity", 10);
+
+    // Publisher to publish in RViz
+	ros::Publisher marker_pub =  
+		n.advertise<visualization_msgs::MarkerArray>("visualization_marker_array", 10);
 
 	std::cout << "Move robot to start position and press Enter to start recording";
 	std::cin.get();
 	std::cout << "Recording demo. Press enter in the keyboard interrupter to stop...\n";
-
-	// Publisher to publish in RViz
-	ros::Publisher marker_pub =  
-		n.advertise<visualization_msgs::MarkerArray>("visualization_marker_array", 10);
 	
+    // Recording of demo - spin here. Callback will be called whenever a
+    // pose is heard. stopRecordingDemo gets set when a keypress is heard
+    // by its callback
 	recording = true;
 	ros::Rate r(ROS_RATE);
     gettimeofday(&start_of_demo, NULL); 
@@ -640,24 +630,29 @@ int main(int argc, char **argv) {
     } 
     
     remove_redundant_points();
-
+    marker_pub.publish(demo_marker_array);
+    ros::spinOnce();
+    
     std::cout << "Removing redundant points.. \n";
     std::cout << "x.size() = " << x.size() << "\n";
     std::cout << "t.size() = " << t.size() << "\n";
 
 	set_x_0_and_g();
 	tau = t[t.size() - 1];
-	//std::cout << "tau =" << tau << "\n"; 
 
-	char satisfied = 'n';
-	//tau *= 2;
-	//g[1] += 0.2;
+    demo_tau = tau;
+    demo_x_0 = x_0;
+    demo_g = g;
 	
+    char satisfied = 'n';
 	while (satisfied != 'y' && satisfied != 'Y') {
+        // Need an interface for tuning K because system is sensitive to it
 		std::cout << "Enter K: ";
 		std::cin >> K;
         D = 2.0 * sqrt(K);
+        reset_params_for_demo();
 		learn_dmp();
+        set_params_for_replay();
 		calculate_trajectory();
 		std::cout << "Calculated trajectory - \n";
 		std::cout << "traj_x.size() = " << traj_x.size() << "\n";
@@ -674,24 +669,25 @@ int main(int argc, char **argv) {
 	float r_amount = 0.0;
 	float per_point_color_diff = 1.0 / num_points;
 	for (int point_num = 0; point_num <= num_points; point_num++) {
-		marker_array.markers[point_num].color.g = g_amount;
-		marker_array.markers[point_num].color.r = r_amount;
+		replay_marker_array.markers[point_num].color.g = g_amount;
+		replay_marker_array.markers[point_num].color.r = r_amount;
 		g_amount -= per_point_color_diff;
 		r_amount += per_point_color_diff;
 	}
 	// Display points in rviz
-	marker_pub.publish(marker_array);
-    
-    // Reset tau for desired duration of demo
-    
+	marker_pub.publish(replay_marker_array);
+    ros::spinOnce();
+
+    // Replay the planned trajectory    
 	std::cout << "Move robot to start position and press enter to replay demo : ";
 	std::cin.get();
-	
-	std::cout << "traj_v.size() = " << traj_v.size() << ". Ok? \n";
-	std::cin.get();
 	replay_calculated_trajectory(ROS_RATE);
-	
 	std::cout << "Replayed demo...";
-	
+
+    // Improve trajectory via RL
+    rl_improvement = true;    
 	improve_via_rl();
+    
+    marker_pub.publish(rl_marker_array);
+    ros::spinOnce();
 }
